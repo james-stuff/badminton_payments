@@ -3,6 +3,7 @@ import arrow
 import argparse
 import pandas as pd
 from io import StringIO
+import pathlib
 
 
 def list_of_names_from_whatsapp(pasted_list: str) -> [str]:
@@ -69,19 +70,48 @@ def migrate_mappings_to_mongo(raw_mappings: str):
     collection.update_one(record, {"$set": account_mappings_from_raw(raw_mappings)})
 
 
-def monday_process(data: str) -> None:
-    # TODO: import .csv file from statement download
-    #       assume the first transfer doesn't arrive until Saturday
-    #       (have never seen any on same day, and Kevin K is often a week late!)
-    print('')
-    bank_df = pd.read_csv(StringIO(data), "\t", names=["Date", "Name", "AC Num",
-                                                       "Blank", "Value", "Balance"])
+def create_nationwide_dataset(passed_data: str = "",
+                              session_date = None) -> pd.DataFrame:
+    csv_input = StringIO(passed_data)
+    kw_args = {"names": ["Date", "Account ID", "AC Num", "Blank", "Value", "Balance"]}
+    if passed_data:
+        kw_args["delimiter"] = "\t"
+    else:
+        csv_input = get_latest_nationwide_csv_filename()
+        kw_args["encoding"] = "cp1252"
+        kw_args["skiprows"] = 5
+    bank_df = pd.read_csv(csv_input, **kw_args)
+    bank_df = clean_nationwide_data(bank_df, session_date)
+    print(bank_df)
+    return bank_df
+
+
+def clean_nationwide_data(df_bank: pd.DataFrame, session_date = None) -> pd.DataFrame:
+    """assumes that earliest payments are received the day after the session"""
+    next_saturday = arrow.get(session_date).shift(days=8).date()
+    df_bank["Date"] = pd.to_datetime(df_bank["Date"])
+    df_bank["Account ID"] = df_bank["Account ID"].str[12:]
+    df_bank.loc[df_bank["Account ID"] == "m", "Account ID"] = df_bank["AC Num"].str[:15]
     money_fields = ["Value", "Balance"]
     for mf in money_fields:
-        bank_df[mf] = pd.to_numeric(bank_df[mf].str.strip("£"))
-    bank_df["Date"] = pd.to_datetime(bank_df["Date"])
-    bank_df = bank_df.drop(["Blank"], axis=1)
-    print(bank_df)
+        df_bank[mf] = pd.to_numeric(df_bank[mf].str.strip("£"))
+    df_bank = df_bank.drop(["AC Num", "Blank"], axis=1)
+    df_out = df_bank.loc[(df_bank["Date"] > pd.Timestamp(session_date)) &
+                         (df_bank["Date"] < pd.Timestamp(next_saturday))]
+    print(df_out.info())
+    return df_out
+
+
+def get_latest_nationwide_csv_filename() -> str:
+    downloads_folder = pathlib.Path("C:\\Users\\j_a_c\\Downloads")
+    file_listing = downloads_folder.glob("Statement Download*.csv")
+    if file_listing:
+        return str(max(file_listing, key=lambda file: file.stat().st_ctime))
+    return ""
+
+
+def monday_process(pasted_text: str = "") -> None:
+    print('')
 
     coll = MongoClient().money.badminton
     mappings = coll.find_one({"_id": "AccountMappings"})
@@ -93,11 +123,11 @@ def monday_process(data: str) -> None:
     if me in session:
         record_payment(me, per_person_cost, "host")
 
-    for df_index in range(len(bank_df)):
-        ac_name = bank_df.iloc[df_index]["Name"][12:]
-        ac_number = bank_df.iloc[df_index]["AC Num"][:15]
-        if ac_name in mappings:
-            alias = mappings[ac_name]
+    bank_df = create_nationwide_dataset(pasted_text, session["Date"])
+    for df_index in bank_df.index:
+        account_id = bank_df.loc[df_index]["Account ID"]
+        if account_id in mappings:
+            alias = mappings[account_id]
             unpaid = get_unpaid()
             if isinstance(alias, list):
                 valid_aliases = [*filter(lambda name: name in session, alias)]
@@ -106,31 +136,26 @@ def monday_process(data: str) -> None:
                 else:
                     alias = ""
             if alias in unpaid:
-                record_payment(alias, bank_df.iloc[df_index]['Value'])
+                record_payment(alias, bank_df.loc[df_index]['Value'])
             elif alias not in session:
-                choice = input(f"Who is {mappings[ac_name]}?\n"
+                choice = input(f"Who is {mappings[account_id]}?\n"
                                f"{choice_of_names(unpaid)}\n")
                 new_alias = unpaid[int(choice)]
                 aliases = [alias] if isinstance(alias, str) else alias
                 aliases.append(new_alias)
                 coll.update_one({"_id": "AccountMappings"},
-                                {"$set": {ac_name: aliases}})
+                                {"$set": {account_id: aliases}})
                 record_payment(new_alias, bank_df.iloc[df_index]['Value'])
-        elif ac_number in mappings:
-            if mappings[ac_number] in get_unpaid():
-                record_payment(mappings[ac_number], bank_df.iloc[df_index]['Value'])
-            elif mappings[ac_number] not in session:
-                print(f"Who is {mappings[ac_number]}?")
         else:
             unpaid = get_unpaid()
-            initial = ac_name[0]
+            initial = account_id[0]
             possibles = [p for p in unpaid if p[0] == initial]
-            choice = input(f"Who is {ac_name}?\n"
+            choice = input(f"Who is {account_id}?\n"
                            f"{choice_of_names(possibles)}\n")
             if choice.isnumeric():
                 attendee = possibles[int(choice)]
                 coll.update_one({"_id": "AccountMappings"},
-                                {"$set": {ac_name: attendee}})
+                                {"$set": {account_id: attendee}})
                 record_payment(attendee, bank_df.iloc[df_index]['Value'])
             else:
                 choice = input(f"Choose from all unpaid attendees:\n"
@@ -139,7 +164,7 @@ def monday_process(data: str) -> None:
                     attendee = unpaid[int(choice)]
                     print(f"After choosing ?, you picked {attendee}")
                     coll.update_one({"_id": "AccountMappings"},
-                                    {"$set": {ac_name: attendee}})
+                                    {"$set": {account_id: attendee}})
                     record_payment(attendee, bank_df.iloc[df_index]['Value'])
 
     while input("Did anyone pay in cash? ") in "yY":
