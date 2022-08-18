@@ -99,6 +99,8 @@ def clean_nationwide_data(df_bank: pd.DataFrame, session_date = None) -> pd.Data
     df_out = df_bank.loc[(df_bank["Date"] > pd.Timestamp(session_date)) &
                          (df_bank["Date"] < pd.Timestamp(next_saturday))]
     print(df_out.info())
+    # TODO: remove payments to me (AC Num field)
+    # TODO: second Mohan Krishna payment for Kelsey Kerridge makes things interesting!
     return df_out
 
 
@@ -123,73 +125,79 @@ def monday_process(pasted_text: str = "") -> None:
     if me in session:
         record_payment(me, per_person_cost, "host")
 
+    def get_new_alias_from_input(account_name: str, not_paid: [str]) -> str:
+        initials = [word[0] for word in account_name.split()]
+        right_initials = [name for name in not_paid if name[0] in initials]
+        shortlist = sorted(right_initials,
+                           key=lambda s: initials.index(s[0]))
+        keyed = input(f"Who is {account_name}?\n{choice_of_names(shortlist)}\n")
+        if keyed.isnumeric():
+            return shortlist[int(keyed) - 1]
+        keyed = input(f"Who is {account_name}?\n{choice_of_names(not_paid)}\n")
+        return not_paid[int(keyed) - 1]
+
     bank_df = create_nationwide_dataset(pasted_text, session["Date"])
+    # TODO: what if there are two payments from the same account?
     for df_index in bank_df.index:
         account_id = bank_df.loc[df_index]["Account ID"]
+        payment_amount = bank_df.loc[df_index]["Value"]
         if account_id in mappings:
             alias = mappings[account_id]
             unpaid = get_unpaid()
             if isinstance(alias, list):
                 valid_aliases = [*filter(lambda name: name in session, alias)]
+                alias = ""
                 if valid_aliases:
                     alias = valid_aliases[0]
-                else:
-                    alias = ""
             if alias in unpaid:
-                record_payment(alias, bank_df.loc[df_index]['Value'])
+                record_payment(alias, payment_amount)
             elif alias not in session:
-                choice = input(f"Who is {mappings[account_id]}?\n"
-                               f"{choice_of_names(unpaid)}\n")
-                new_alias = unpaid[int(choice)]
+                """Steve L, Ali I: previous alias is not in current session"""
+                # TODO: what if one of their other aliases (not [0]) is?
+                new_alias = get_new_alias_from_input(f"{alias}/{account_id}", unpaid)
                 aliases = [alias] if isinstance(alias, str) else alias
                 aliases.append(new_alias)
-                coll.update_one({"_id": "AccountMappings"},
-                                {"$set": {account_id: aliases}})
-                record_payment(new_alias, bank_df.iloc[df_index]['Value'])
+                set_new_alias(account_id, aliases)
+                record_payment(new_alias, payment_amount)
         else:
+            """previously un-encountered account id"""
             unpaid = get_unpaid()
-            initial = account_id[0]
-            possibles = [p for p in unpaid if p[0] == initial]
-            choice = input(f"Who is {account_id}?\n"
-                           f"{choice_of_names(possibles)}\n")
-            if choice.isnumeric():
-                attendee = possibles[int(choice)]
-                coll.update_one({"_id": "AccountMappings"},
-                                {"$set": {account_id: attendee}})
-                record_payment(attendee, bank_df.iloc[df_index]['Value'])
-            else:
-                choice = input(f"Choose from all unpaid attendees:\n"
-                               f"{choice_of_names(unpaid)}\n")
-                if choice.isnumeric():
-                    attendee = unpaid[int(choice)]
-                    print(f"After choosing ?, you picked {attendee}")
-                    coll.update_one({"_id": "AccountMappings"},
-                                    {"$set": {account_id: attendee}})
-                    record_payment(attendee, bank_df.iloc[df_index]['Value'])
+            attendee = get_new_alias_from_input(account_id, unpaid)
+            set_new_alias(account_id, attendee)
+            record_payment(attendee, payment_amount)
 
     while input("Did anyone pay in cash? ") in "yY":
         unpaid = get_unpaid()
         choice = int(input(f"Who?\n{choice_of_names(unpaid)}\n"))
-        amount = float(input(f"How much did they pay? £"))
+        cash_amount = float(input(f"How much did they pay? £"))
         # print(f"You are telling me {unpaid[choice]} has paid £{amount}")
-        record_payment(unpaid[choice], amount, "cash")
+        record_payment(unpaid[choice - 1], cash_amount, "cash")
 
     while input("Were there any no-shows? ") in "yY":
         unpaid = get_unpaid()
         choice = int(input(f"Who?\n{choice_of_names(unpaid)}\n"))
-        record_payment(unpaid[choice], 0, "no show")
+        record_payment(unpaid[choice - 1], 0, "no show")
 
     after = coll.find_one({"Date": {"$eq": latest_perse_time().datetime}})
     print(f"Found session:\n{after}")
     still_unpaid = get_unpaid()
-    print(f"{still_unpaid} have not paid.  That is {len(still_unpaid)} people.")
+    if still_unpaid:
+        print(f"{still_unpaid} have not paid.  That is {len(still_unpaid)} people.")
     payments_string = "\n".join([f"\t£{get_total_payments(after, t):.2f} in {t}"
                                  for t in ("transfer", "host", "cash")])
     print(f"So far have received \n{payments_string}\nfor this session.")
 
 
+def set_new_alias(account_name: str, alias: object):
+    """alias can be string or list of strings"""
+    coll = MongoClient().money.badminton
+    coll.update_one({"_id": "AccountMappings"},
+                    {"$set": {account_name: alias}})
+
+
 def choice_of_names(names: [str]) -> str:
-    option_list = [f"[{i}] {name}" for i, name in enumerate(names)] + ["[?] Don't know"]
+    option_list = [f"[{i + 1}] {name}" for i, name in enumerate(names)] + \
+                  ["[?] Don't know"]
     display_string = ""
     max_line_length = 80
     while option_list:
