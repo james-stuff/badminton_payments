@@ -161,6 +161,8 @@ def monday_process(pasted_text: str = "") -> None:
         choice = int(input(f"Who?\n{choice_of_names(unpaid)}\n"))
         record_payment(unpaid[choice - 1], 0, "no show")
 
+    sorting_out_multi_person_payments(per_person_cost)
+
     after = coll.find_one({"Date": {"$eq": mongo_date}})
     print(f"Found session:\n{after}")
     still_unpaid = get_unpaid()
@@ -204,29 +206,37 @@ def identify_payer(account_id: str, amount: float) -> str:
     return new_alias
 
 
-def sorting_out_multi_person_payments():
-    pass
-    # """NB. This logic has to be repeated for every payment made"""
-    # if payment_amount == per_person_cost:
-    #     record_payment(alias, payment_amount)
-    # else:
-    #     remainder_amount = payment_amount - per_person_cost
-    #     allocate_option = f"Allocate £{remainder_amount:.2f} to someone else"
-    #     use_all_option = f"Put £{payment_amount:.2f} against them"
-    #     options = [allocate_option, use_all_option, "Ignore this payment"]
-    #     option = input(f"{alias} has paid £{payment_amount:.2f}. "
-    #                    f"What do you want to do about it?\n"
-    #                    f"{choice_of_names(options)}\n")
-    #     if int(option) == 1:
-    #         recipient = get_new_alias_from_input(" ".join((chr(n) for n in range(65, 91))), get_unpaid())
-    #         record_payment(alias, per_person_cost)
-    #         record_payment(recipient, remainder_amount)
-            # TODO: Ignore needs to be an option for an unknown account id?
-            #       see Vania's walk payment triggering a payment against Van
+def sorting_out_multi_person_payments(per_person_cost: float):
+    coll = MongoClient().money.badminton
+    for attendee in get_all_attendees():
+        payment_record = coll.find_one({"Date": {"$eq": session_date.datetime},
+                                        attendee: {"$exists": True}})
+        for type_of_payment in ("transfer", "cash", "host"):
+            if type_of_payment in payment_record[attendee]:
+                # print(f"{attendee} paid {}")
+                amount_paid = payment_record[attendee][type_of_payment]
+                if amount_paid > per_person_cost:
+                    excess = amount_paid - per_person_cost
+                    allocate_option = f"Allocate £{excess:.2f} to someone else"
+                    use_all_option = f"Keep all £{amount_paid:.2f} against {attendee}"
+                    options = [allocate_option, use_all_option, "Ignore this payment"]
+                    option = input(f"{attendee} has paid an additional "
+                                   f"£{excess:.2f}. "
+                                   f"What do you want to do with it?\n"
+                                   f"{choice_of_names(options)}\n")
+                    if int(option) == 1:
+                        recipient = get_new_alias_from_input("", 0)
+                        record_payment(attendee, per_person_cost, type_of_payment, False)
+                        record_payment(recipient, excess, type_of_payment)
+                    elif int(option) == 3:
+                        record_payment(attendee, per_person_cost, type_of_payment, False)
+
+
             # TODO: Don't think this has happened yet, but what if there
             #       are multiple payments from the same account for the same
             #       session?  (e.g. person pays for themselves, then remembers
             #       they also need to pay for their other half)
+            #       Maybe should just create the session afresh on each run?
 
 
 def get_new_alias_from_input(account_name: str, amount: float) -> str:
@@ -240,7 +250,8 @@ def get_new_alias_from_input(account_name: str, amount: float) -> str:
                       f"(They paid £{amount:.2f})\n{choice_of_names(group)}\n")
         if keyed.isnumeric() and int(keyed) in range(1, len(group) + 1):
             new_alias = group[int(keyed) - 1]
-            set_new_alias(account_name, new_alias)
+            if account_name:
+                set_new_alias(account_name, new_alias)
             return new_alias
     return ""
 
@@ -281,12 +292,14 @@ def choice_of_names(names: [str]) -> str:
 
 
 def record_payment(attendee: str, amount: float,
-                   payment_type: str = "transfer"):
+                   payment_type: str = "transfer",
+                   keep_previous_payment: bool = True):
     coll = MongoClient().money.badminton
     previous_amount = 0
     attendee_record = coll.find_one({"Date": {"$eq": session_date.datetime},
                                      attendee: {"$exists": True}})
-    if attendee_record and payment_type in attendee_record[attendee]:
+    if keep_previous_payment and attendee_record and \
+            payment_type in attendee_record[attendee]:
         previous_amount = attendee_record[attendee][payment_type]
     coll.update_one({"Date": {"$eq": session_date.datetime}},
                     {"$set": {attendee: {payment_type: previous_amount + amount}}})
