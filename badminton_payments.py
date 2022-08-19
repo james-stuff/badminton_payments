@@ -6,6 +6,11 @@ from io import StringIO
 import pathlib
 
 
+def set_session_date(new_date: arrow.Arrow):
+    global session_date
+    session_date = new_date
+
+
 def list_of_names_from_whatsapp(pasted_list: str) -> [str]:
     def extract_name(row: str) -> str:
         if row:
@@ -20,17 +25,17 @@ def list_of_names_from_whatsapp(pasted_list: str) -> [str]:
     return names
 
 
-def create_session(date: arrow.Arrow, people: [str]):
+def create_session(people: [str]):
     collection = MongoClient().money.badminton
-    session_dt = date.datetime
-    date_query = {"Date": {"$eq": session_dt}}
+    mongo_date = session_date.datetime
+    date_query = {"Date": {"$eq": mongo_date}}
     if collection.find_one(date_query):
-        if input(f"Session already exists for {date.format('ddd Do MMMM')}, "
+        if input(f"Session already exists for {session_date.format('ddd Do MMMM')}, "
                  f"overwrite? ") in "nN":
             return
         collection.delete_many(date_query)
     document = {name: {} for name in people}
-    document["Date"] = session_dt
+    document["Date"] = mongo_date
     collection.insert_one(document)
 
 
@@ -48,10 +53,18 @@ def latest_perse_time() -> arrow.Arrow:
     return time.floor("day").replace(hour=19, minute=30)
 
 
-def run_in_add_session_mode():
-    raw_names = multi_line_input("Please paste in the list of names from WhatsApp: ")
+def time_machine(requested_date: arrow.Arrow) -> arrow.Arrow:
+    weeks_back = ((arrow.now() - requested_date).days - 1) // 7
+    return latest_perse_time().shift(days=-7 * weeks_back)
+
+
+def run_in_add_session_mode(names: str = ""):
+    if names:
+        raw_names = names
+    else:
+        raw_names = multi_line_input("Please paste in the list of names from WhatsApp: ")
     name_list = list_of_names_from_whatsapp(raw_names)
-    create_session(latest_perse_time(), name_list)
+    create_session(name_list)
 
 
 def account_mappings_from_raw(raw: str) -> dict:
@@ -70,8 +83,7 @@ def migrate_mappings_to_mongo(raw_mappings: str):
     collection.update_one(record, {"$set": account_mappings_from_raw(raw_mappings)})
 
 
-def create_nationwide_dataset(passed_data: str = "",
-                              session_date = None) -> pd.DataFrame:
+def create_nationwide_dataset(passed_data: str = "") -> pd.DataFrame:
     csv_input = StringIO(passed_data)
     kw_args = {"names": ["Date", "Account ID", "AC Num", "Blank", "Value", "Balance"]}
     if passed_data:
@@ -81,26 +93,27 @@ def create_nationwide_dataset(passed_data: str = "",
         kw_args["encoding"] = "cp1252"
         kw_args["skiprows"] = 5
     bank_df = pd.read_csv(csv_input, **kw_args)
-    bank_df = clean_nationwide_data(bank_df, session_date)
+    bank_df = clean_nationwide_data(bank_df)
     print(bank_df)
     return bank_df
 
 
-def clean_nationwide_data(df_bank: pd.DataFrame, session_date = None) -> pd.DataFrame:
+def clean_nationwide_data(df_bank: pd.DataFrame) -> pd.DataFrame:
     """assumes that earliest payments are received the day after the session"""
-    next_saturday = arrow.get(session_date).shift(days=8).date()
+    next_saturday = session_date.shift(days=8).date()
     df_bank["Date"] = pd.to_datetime(df_bank["Date"])
     df_bank["Account ID"] = df_bank["Account ID"].str[12:]
+    df_bank = df_bank.drop(df_bank.loc[df_bank["AC Num"] == "JAMES CLARKE"].index)
     df_bank.loc[df_bank["Account ID"] == "m", "Account ID"] = df_bank["AC Num"].str[:15]
     money_fields = ["Value", "Balance"]
     for mf in money_fields:
         df_bank[mf] = pd.to_numeric(df_bank[mf].str.strip("£"))
     df_bank = df_bank.drop(["AC Num", "Blank"], axis=1)
-    df_out = df_bank.loc[(df_bank["Date"] > pd.Timestamp(session_date)) &
+    df_out = df_bank.loc[(df_bank["Date"] > pd.Timestamp(session_date.date())) &
                          (df_bank["Date"] < pd.Timestamp(next_saturday))]
     print(df_out.info())
-    # TODO: remove payments to me (AC Num field)
     # TODO: second Mohan Krishna payment for Kelsey Kerridge makes things interesting!
+    #       actually gets ignored because he doens't show up in unpaid
     return df_out
 
 
@@ -113,11 +126,9 @@ def get_latest_nationwide_csv_filename() -> str:
 
 
 def monday_process(pasted_text: str = "") -> None:
-    print('')
-
     coll = MongoClient().money.badminton
-    mappings = coll.find_one({"_id": "AccountMappings"})
-    session = coll.find_one({"Date": {"$eq": latest_perse_time().datetime}})
+    mongo_date = session_date.datetime
+    session = coll.find_one({"Date": {"$eq": mongo_date}})
 
     # per_person_cost = float(input("Please enter the amount charged per person: £"))
     per_person_cost = 4.4
@@ -125,48 +136,20 @@ def monday_process(pasted_text: str = "") -> None:
     if me in session:
         record_payment(me, per_person_cost, "host")
 
-    def get_new_alias_from_input(account_name: str, not_paid: [str]) -> str:
-        initials = [word[0] for word in account_name.split()]
-        right_initials = [name for name in not_paid if name[0] in initials]
-        shortlist = sorted(right_initials,
-                           key=lambda s: initials.index(s[0]))
-        keyed = input(f"Who is {account_name}?\n{choice_of_names(shortlist)}\n")
-        if keyed.isnumeric():
-            return shortlist[int(keyed) - 1]
-        keyed = input(f"Who is {account_name}?\n{choice_of_names(not_paid)}\n")
-        return not_paid[int(keyed) - 1]
-
-    bank_df = create_nationwide_dataset(pasted_text, session["Date"])
+    bank_df = create_nationwide_dataset(pasted_text)
     # TODO: what if there are two payments from the same account?
     for df_index in bank_df.index:
         account_id = bank_df.loc[df_index]["Account ID"]
         payment_amount = bank_df.loc[df_index]["Value"]
-        if account_id in mappings:
-            alias = mappings[account_id]
-            unpaid = get_unpaid()
-            if isinstance(alias, list):
-                valid_aliases = [*filter(lambda name: name in session, alias)]
-                alias = ""
-                if valid_aliases:
-                    alias = valid_aliases[0]
-            if alias in unpaid:
-                record_payment(alias, payment_amount)
-            elif alias not in session:
-                """Steve L, Ali I: previous alias is not in current session"""
-                # TODO: what if one of their other aliases (not [0]) is?
-                new_alias = get_new_alias_from_input(f"{alias}/{account_id}", unpaid)
-                aliases = [alias] if isinstance(alias, str) else alias
-                aliases.append(new_alias)
-                set_new_alias(account_id, aliases)
-                record_payment(new_alias, payment_amount)
-        else:
-            """previously un-encountered account id"""
-            unpaid = get_unpaid()
-            attendee = get_new_alias_from_input(account_id, unpaid)
-            set_new_alias(account_id, attendee)
-            record_payment(attendee, payment_amount)
+        paying_attendee = find_in_existing_mappings(account_id)
+        if not paying_attendee:
+            paying_attendee = identify_payer(account_id, payment_amount)
+        if paying_attendee:
+            record_payment(paying_attendee, payment_amount)
 
     while input("Did anyone pay in cash? ") in "yY":
+        # TODO: this (and the no-shows loop) show everyone in the list of options
+        # TODO: break out of loop if there are no more unpaid
         unpaid = get_unpaid()
         choice = int(input(f"Who?\n{choice_of_names(unpaid)}\n"))
         cash_amount = float(input(f"How much did they pay? £"))
@@ -178,7 +161,7 @@ def monday_process(pasted_text: str = "") -> None:
         choice = int(input(f"Who?\n{choice_of_names(unpaid)}\n"))
         record_payment(unpaid[choice - 1], 0, "no show")
 
-    after = coll.find_one({"Date": {"$eq": latest_perse_time().datetime}})
+    after = coll.find_one({"Date": {"$eq": mongo_date}})
     print(f"Found session:\n{after}")
     still_unpaid = get_unpaid()
     if still_unpaid:
@@ -188,18 +171,99 @@ def monday_process(pasted_text: str = "") -> None:
     print(f"So far have received \n{payments_string}\nfor this session.")
 
 
+def find_in_existing_mappings(account_id: str) -> str:
+    coll = MongoClient().money.badminton
+    mappings = coll.find_one({"_id": "AccountMappings"})
+    if account_id in mappings:
+        alias = mappings[account_id]
+        attendees = get_all_attendees()
+        if alias in attendees:
+            return alias
+        if isinstance(alias, list):
+            valid_aliases = [*filter(lambda name: name in attendees, alias)]
+            if valid_aliases:
+                return valid_aliases[0]
+    return ""
+
+
+def identify_payer(account_id: str, amount: float) -> str:
+    """Steve L, Ali I: previous alias is not in current session"""
+    # TODO: test that this works the second time round (i.e. once in mappings)
+    coll = MongoClient().money.badminton
+    mappings = coll.find_one({"_id": "AccountMappings"})
+    if account_id in mappings:
+        old_alias = mappings[account_id]
+        if isinstance(old_alias, list):
+            old_alias = old_alias[0]
+        new_alias = get_new_alias_from_input(f"{old_alias} / {account_id}", amount)
+        set_new_alias(account_id, new_alias)
+    else:
+        """previously un-encountered account id"""
+        new_alias = get_new_alias_from_input(account_id, amount)
+        set_new_alias(account_id, new_alias)
+    return new_alias
+
+
+def sorting_out_multi_person_payments():
+    pass
+    # """NB. This logic has to be repeated for every payment made"""
+    # if payment_amount == per_person_cost:
+    #     record_payment(alias, payment_amount)
+    # else:
+    #     remainder_amount = payment_amount - per_person_cost
+    #     allocate_option = f"Allocate £{remainder_amount:.2f} to someone else"
+    #     use_all_option = f"Put £{payment_amount:.2f} against them"
+    #     options = [allocate_option, use_all_option, "Ignore this payment"]
+    #     option = input(f"{alias} has paid £{payment_amount:.2f}. "
+    #                    f"What do you want to do about it?\n"
+    #                    f"{choice_of_names(options)}\n")
+    #     if int(option) == 1:
+    #         recipient = get_new_alias_from_input(" ".join((chr(n) for n in range(65, 91))), get_unpaid())
+    #         record_payment(alias, per_person_cost)
+    #         record_payment(recipient, remainder_amount)
+            # TODO: Ignore needs to be an option for an unknown account id?
+            #       see Vania's walk payment triggering a payment against Van
+            # TODO: Don't think this has happened yet, but what if there
+            #       are multiple payments from the same account for the same
+            #       session?  (e.g. person pays for themselves, then remembers
+            #       they also need to pay for their other half)
+
+
+def get_new_alias_from_input(account_name: str, amount: float) -> str:
+    not_paid = get_unpaid()
+    initials = [word[0] for word in account_name.split()]
+    right_initials = [*filter(lambda name: name[0] in initials, not_paid)]
+    shortlist = sorted(right_initials,
+                       key=lambda s: initials.index(s[0]))
+    for group in (shortlist, not_paid):
+        keyed = input(f"Who is {account_name}?  "
+                      f"(They paid £{amount:.2f})\n{choice_of_names(group)}\n")
+        if keyed.isnumeric() and int(keyed) in range(1, len(group) + 1):
+            new_alias = group[int(keyed) - 1]
+            set_new_alias(account_name, new_alias)
+            return new_alias
+    return ""
+
+
 def set_new_alias(account_name: str, alias: object):
     """alias can be string or list of strings"""
     coll = MongoClient().money.badminton
+    existing_alias = None
+    mappings = coll.find_one({"_id": "AccountMappings"})
+    if mappings and account_name in mappings:
+        existing_alias = mappings[account_name]
+        if isinstance(existing_alias, str):
+            existing_alias = [existing_alias]
+            alias = existing_alias + [alias]
     coll.update_one({"_id": "AccountMappings"},
                     {"$set": {account_name: alias}})
 
 
 def choice_of_names(names: [str]) -> str:
     option_list = [f"[{i + 1}] {name}" for i, name in enumerate(names)] + \
-                  ["[?] Don't know"]
+                  ["[?] Don't know / Ignore"]
     display_string = ""
-    max_line_length = 80
+    max_line_length = 72
     while option_list:
         next_line = "\t"
         for index, text in enumerate(option_list):
@@ -216,22 +280,37 @@ def choice_of_names(names: [str]) -> str:
     return display_string
 
 
-def record_payment(attendee: str, amount: float, payment_type: str = "transfer"):
+def record_payment(attendee: str, amount: float,
+                   payment_type: str = "transfer"):
     coll = MongoClient().money.badminton
-    coll.update_one({"Date": {"$eq": latest_perse_time().datetime}},
-                    {"$set": {attendee: {payment_type: amount}}})
+    previous_amount = 0
+    attendee_record = coll.find_one({"Date": {"$eq": session_date.datetime},
+                                     attendee: {"$exists": True}})
+    if attendee_record and payment_type in attendee_record[attendee]:
+        previous_amount = attendee_record[attendee][payment_type]
+    coll.update_one({"Date": {"$eq": session_date.datetime}},
+                    {"$set": {attendee: {payment_type: previous_amount + amount}}})
     print(f"{payment_type} transaction of £{amount} added for {attendee}")
 
 
 def get_unpaid() -> [str]:
     coll = MongoClient().money.badminton
-    session = coll.find_one({"Date": {"$eq": latest_perse_time().datetime}})
+    session = coll.find_one({"Date": {"$eq": session_date.datetime}})
     return [k for k in session if k not in ["Date", "_id"] and not session[k]]
+
+
+def get_all_attendees() -> [str]:
+    coll = MongoClient().money.badminton
+    session = coll.find_one({"Date": {"$eq": session_date.datetime}})
+    return [k for k in session if k not in ["Date", "_id"]]
 
 
 def get_total_payments(session: dict, payment_type: str = "transfer") -> float:
     return sum([v[payment_type] for v in session.values()
                 if isinstance(v, dict) and payment_type in v])
+
+
+session_date = latest_perse_time()
 
 
 if __name__ == "__main__":
