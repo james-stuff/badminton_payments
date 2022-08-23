@@ -112,9 +112,6 @@ def clean_nationwide_data(df_bank: pd.DataFrame) -> pd.DataFrame:
     df_out = df_bank.loc[(df_bank["Date"] > pd.Timestamp(session_date.date())) &
                          (df_bank["Date"] < pd.Timestamp(next_saturday))]
     print(df_out.info())
-    # TODO: second Mohan Krishna payment for Kelsey Kerridge makes things interesting!
-    #       actually gets ignored because he doens't show up in unpaid
-    #       test again for 12th Aug
     return df_out
 
 
@@ -132,13 +129,11 @@ def monday_process(pasted_text: str = "") -> None:
     session = coll.find_one({"Date": {"$eq": mongo_date}})
 
     per_person_cost = float(input("Please enter the amount charged per person: £"))
-    # per_person_cost = 4.4
     me = "James (Host)"
     if me in session:
         record_payment(me, per_person_cost, "host")
 
     bank_df = create_nationwide_dataset(pasted_text)
-    # TODO: what if there are two payments from the same account?
     for df_index in bank_df.index:
         account_id = bank_df.loc[df_index]["Account ID"]
         payment_amount = bank_df.loc[df_index]["Value"]
@@ -147,25 +142,11 @@ def monday_process(pasted_text: str = "") -> None:
             paying_attendee = identify_payer(account_id, payment_amount)
         if paying_attendee:
             record_payment(paying_attendee, payment_amount)
-
-    while input("Did anyone pay in cash? ") in "yY":
-        # TODO: this (and the no-shows loop) show everyone in the list of options
-        # TODO: break out of loop if there are no more unpaid
-        unpaid = get_unpaid()
-        choice = int(input(f"Who?\n{choice_of_names(unpaid)}\n"))
-        cash_amount = float(input(f"How much did they pay? £"))
-        # print(f"You are telling me {unpaid[choice]} has paid £{amount}")
-        record_payment(unpaid[choice - 1], cash_amount, "cash")
-
-    while input("Were there any no-shows? ") in "yY":
-        unpaid = get_unpaid()
-        choice = int(input(f"Who?\n{choice_of_names(unpaid)}\n"))
-        record_payment(unpaid[choice - 1], 0, "no show")
-
+    handle_non_transfer_payments()
     sorting_out_multi_person_payments(per_person_cost)
 
     after = coll.find_one({"Date": {"$eq": mongo_date}})
-    print(f"Found session:\n{after}")
+    print(f"Full session details:\n{after}")
     still_unpaid = get_unpaid()
     if still_unpaid:
         print(f"{still_unpaid} have not paid.  That is {len(still_unpaid)} people.")
@@ -190,7 +171,7 @@ def find_in_existing_mappings(account_id: str) -> str:
 
 
 def identify_payer(account_id: str, amount: float) -> str:
-    """Steve L, Ali I: previous alias is not in current session"""
+    """e.g. Steve L, Ali I: previous alias is not in current session"""
     # TODO: test that this works the second time round (i.e. once in mappings)
     coll = MongoClient().money.badminton
     mappings = coll.find_one({"_id": "AccountMappings"})
@@ -198,7 +179,7 @@ def identify_payer(account_id: str, amount: float) -> str:
         old_alias = mappings[account_id]
         if isinstance(old_alias, list):
             old_alias = old_alias[0]
-        new_alias = get_new_alias_from_input(f"{old_alias} / {account_id}", amount)
+        new_alias = get_new_alias_from_input(account_id, amount, clue=old_alias)
         set_new_alias(account_id, new_alias)
     else:
         """previously un-encountered account id"""
@@ -206,27 +187,25 @@ def identify_payer(account_id: str, amount: float) -> str:
         set_new_alias(account_id, new_alias)
     return new_alias
 
-# TODO: PERSON IDENTIFICATION SCENARIOS:
-#   Who to allocate multiple payments to - whole list of unpaid
-#   Previously unknown account id - use initials as clue
-#   Previously encountered but new alias - use initials
-#       (initials don't always help, e.g. Ria, so need second pass)
-#   No-shows and cash payments
 
-
-
-def get_new_alias_from_input(account_name: str, amount: float) -> str:
-    not_paid = get_unpaid()
-    initials = [word[0] for word in account_name.split()]
-    right_initials = [*filter(lambda name: name[0] in initials, not_paid)]
-    shortlist = sorted(right_initials,
-                       key=lambda s: initials.index(s[0]))
-    for group in (shortlist, not_paid):
-        keyed = input(f"Who is {account_name}?  "
-                      f"(They paid £{amount:.2f})\n{choice_of_names(group)}\n")
-        if keyed.isnumeric() and int(keyed) in range(1, len(group) + 1):
-            return group[int(keyed) - 1]
-    return ""
+def handle_non_transfer_payments():
+    special_cases = (
+        ("cash", "Did anyone else pay in cash?"),
+        ("no show", "Were there any more no-shows?")
+    )
+    for case, question in special_cases:
+        if input(f"{question} ") in "yY":
+            attendee = True
+            while attendee:
+                attendee, amount = pick_name_from_unpaid("Who"), 0
+                if attendee:
+                    if case == "cash":
+                        amount = float(input(f"How much did {attendee} pay?\n\t£"))
+                    record_payment(attendee, amount, case)
+                if not get_unpaid():
+                    break
+        if not get_unpaid():
+            break
 
 
 def sorting_out_multi_person_payments(per_person_cost: float):
@@ -240,7 +219,7 @@ def sorting_out_multi_person_payments(per_person_cost: float):
                 # print(f"\tThey paid {session_record[attendee][type_of_payment]:.2f}")
                 amount_paid = session_record[attendee][type_of_payment]
                 excess = amount_paid - per_person_cost
-                while excess:
+                while excess > 0.1:
                     options = (
                         f"Pay for someone else",
                         f"Keep all £{amount_paid:.2f} against {attendee}",
@@ -249,9 +228,9 @@ def sorting_out_multi_person_payments(per_person_cost: float):
                     choice = input(f"{attendee} has paid an additional "
                                    f"£{excess:.2f}. "
                                    f"What do you want to do with it?\n"
-                                   f"{choice_of_names(options)}\n")
+                                   f"{show_options_list(options)}\n")
                     if int(choice) == 1:
-                        recipient = get_new_alias_from_input("", 0)
+                        recipient = pick_name_from_unpaid("Who are they paying for")
                         excess -= per_person_cost
                         amount_paid -= per_person_cost
                         record_payment(attendee, amount_paid, type_of_payment, False)
@@ -277,13 +256,41 @@ def set_new_alias(account_name: str, alias: object):
                     {"$set": {account_name: alias}})
 
 
-def choice_of_names(names: [str]) -> str:
-    option_list = [f"[{i + 1}] {name}" for i, name in enumerate(names)] + \
+def pick_name_from_unpaid(question: str) -> str:
+    return pick_name_from(get_unpaid(), question)
+
+
+def pick_name_from(list_of_names: [str], question: str) -> str:
+    choice = input(f"{question}?\n{show_options_list(list_of_names)}\n")
+    if choice.isnumeric():
+        index_chosen = int(choice) - 1
+        if index_chosen in range(len(list_of_names)):
+            return list_of_names[index_chosen]
+    return ""
+
+
+def get_new_alias_from_input(account_name: str,
+                             amount: float, clue: str = "") -> str:
+    not_paid = get_unpaid()
+    initials = [word[0] for word in clue.title().split()]
+    initials += [word[0] for word in account_name.split()]
+    right_initials = [*filter(lambda name: name[0] in initials, not_paid)]
+    shortlist = sorted(right_initials,
+                       key=lambda s: initials.index(s[0]))
+    hint = f" (previously known as {clue})" if clue else ""
+    for group in (shortlist, not_paid):
+        question = f"Who is {account_name}{hint}?  (They paid £{amount:.2f})"
+        identified_attendee = pick_name_from(group, question)
+        if identified_attendee:
+            return identified_attendee
+    return ""
+
+
+def show_options_list(options: [str]) -> str:
+    option_list = [f"[{i + 1}] {name}" for i, name in enumerate(options)] + \
                   ["[?] Don't know / Ignore"]
     # TODO: see Vania's train payment.  Want to be able to ignore it the first time
     #       around, not be forced to pick from the list and hit '?' again
-    # TODO: Karlo -> float rounding, makes me allocate again for -£0.00
-    #       ignore any excess < 10p?  Also good for Patricia/Josy
     display_string = ""
     max_line_length = 72
     while option_list:
