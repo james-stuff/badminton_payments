@@ -11,17 +11,35 @@ def set_session_date(new_date: arrow.Arrow):
     session_date = new_date
 
 
+def ensure_uniqueness(names: [str]) -> [str]:
+    if len(set(names)) == len(names):
+        return names
+    unique_names = []
+    name_counters = {}
+    for nm in names:
+        if nm not in unique_names:
+            unique_names.append(nm)
+        else:
+            counter = 1
+            if nm in name_counters:
+                counter = name_counters[nm] + 1
+            unique_names.append(f"{nm}_{counter}")
+            name_counters[nm] = counter
+    return unique_names
+
+
 def list_of_names_from_whatsapp(pasted_list: str) -> [str]:
     def extract_name(row: str) -> str:
         if row:
             if "." in row:
                 dot_index = row.index(".")
                 row = row[dot_index + 1:]
-            return row.strip().title()
+            return row.replace(".", "").strip().title()
         return ""
 
     names = pasted_list.split("\n")
     names = [*filter(lambda x: x, [extract_name(n) for n in names])]
+    names = ensure_uniqueness(names)
     return names
 
 
