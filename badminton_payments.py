@@ -52,7 +52,7 @@ def create_session(people: [str]):
                  f"overwrite? ") in "nN":
             return
         collection.delete_many(date_query)
-    document = {name: {} for name in people}
+    document = {"People": {name: {} for name in people}}
     document["Date"] = mongo_date
     collection.insert_one(document)
 
@@ -144,11 +144,11 @@ def get_latest_nationwide_csv_filename() -> str:
 def monday_process(pasted_text: str = "") -> None:
     coll = MongoClient().money.badminton
     mongo_date = session_date.datetime
-    session = coll.find_one({"Date": {"$eq": mongo_date}})
+    attendees = coll.find_one({"Date": {"$eq": mongo_date}})["People"]
 
     per_person_cost = float(input("Please enter the amount charged per person: £"))
     me = "James (Host)"
-    if me in session:
+    if me in attendees:
         record_payment(me, per_person_cost, "host")
 
     bank_df = create_nationwide_dataset(pasted_text)
@@ -231,11 +231,12 @@ def sorting_out_multi_person_payments(per_person_cost: float):
     for attendee in get_all_attendees():
         # print(f"<multi> Processing {attendee} . . . ")
         session_record = coll.find_one({"Date": {"$eq": session_date.datetime},
-                                        attendee: {"$exists": True}})
+                                        "People": {"$exists": True}})
+        # TODO: maybe don't need to check existence of "People" key?
         for type_of_payment in ("transfer", "cash", "host"):
-            if type_of_payment in session_record[attendee]:
+            if type_of_payment in session_record["People"][attendee]:
                 # print(f"\tThey paid {session_record[attendee][type_of_payment]:.2f}")
-                amount_paid = session_record[attendee][type_of_payment]
+                amount_paid = session_record["People"][attendee][type_of_payment]
                 excess = amount_paid - per_person_cost
                 while excess > 0.1:
                     options = (
@@ -332,26 +333,28 @@ def record_payment(attendee: str, amount: float,
                    keep_previous_payment: bool = True):
     coll = MongoClient().money.badminton
     previous_amount = 0
-    attendee_record = coll.find_one({"Date": {"$eq": session_date.datetime},
-                                     attendee: {"$exists": True}})
-    if keep_previous_payment and attendee_record and \
-            payment_type in attendee_record[attendee]:
-        previous_amount = attendee_record[attendee][payment_type]
+    session_record = coll.find_one({"Date": {"$eq": session_date.datetime},
+                                    "People": {"$exists": True}})
+    people = session_record["People"]
+    if keep_previous_payment and session_record and \
+            payment_type in session_record["People"][attendee]:
+        previous_amount = session_record["People"][attendee][payment_type]
+    people[attendee] = {payment_type: previous_amount + amount}
     coll.update_one({"Date": {"$eq": session_date.datetime}},
-                    {"$set": {attendee: {payment_type: previous_amount + amount}}})
+                    {"$set": {"People": people}})
     print(f"{payment_type} transaction of £{amount:.2f} added for {attendee}")
 
 
 def get_unpaid() -> [str]:
     coll = MongoClient().money.badminton
-    session = coll.find_one({"Date": {"$eq": session_date.datetime}})
-    return [k for k in session if k not in ["Date", "_id"] and not session[k]]
+    session_people = coll.find_one({"Date": {"$eq": session_date.datetime}})["People"]
+    return [k for k in session_people if not session_people[k]]
 
 
 def get_all_attendees() -> [str]:
     coll = MongoClient().money.badminton
-    session = coll.find_one({"Date": {"$eq": session_date.datetime}})
-    return [k for k in session if k not in ["Date", "_id"]]
+    session_people = coll.find_one({"Date": {"$eq": session_date.datetime}})["People"]
+    return [*session_people.keys()]
 
 
 def get_total_payments(session: dict, payment_type: str = "transfer") -> float:
