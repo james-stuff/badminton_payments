@@ -12,10 +12,10 @@ def set_session_date(new_date: arrow.Arrow):
 
 
 def ensure_uniqueness(names: [str]) -> [str]:
+    """where duplicate names are encountered, appends _n"""
     if len(set(names)) == len(names):
         return names
-    unique_names = []
-    name_counters = {}
+    unique_names, name_counters = [], {}
     for nm in names:
         if nm not in unique_names:
             unique_names.append(nm)
@@ -63,17 +63,18 @@ def multi_line_input(prompt: str) -> str:
     return '\n'.join(iter(input, sentinel))
 
 
-def latest_perse_time() -> arrow.Arrow:
+def get_latest_perse_time(request_time: arrow.Arrow = arrow.now(tz="local")) -> arrow.Arrow:
     week = arrow.Arrow.range(frame="days",
-                             start=arrow.now(tz="local").shift(days=-7),
+                             start=request_time.shift(days=-7),
                              limit=7)
     time = [*filter(lambda d: d.format("ddd") == "Fri", week)][0]
     return time.floor("day").replace(hour=19, minute=30)
 
 
 def time_machine(requested_date: arrow.Arrow) -> arrow.Arrow:
-    weeks_back = ((arrow.now() - requested_date).days - 1) // 7
-    return latest_perse_time().shift(days=-7 * weeks_back)
+    """Get time of most recent Perse session for a given date.
+    If a Friday is requested, it will return session time on the same day"""
+    return get_latest_perse_time(requested_date.shift(days=1).to("local"))
 
 
 def run_in_add_session_mode(names: str = ""):
@@ -163,7 +164,7 @@ def monday_process(pasted_text: str = "") -> None:
     handle_non_transfer_payments()
     sorting_out_multi_person_payments(per_person_cost)
 
-    after = coll.find_one({"Date": {"$eq": mongo_date}})
+    after = coll.find_one({"Date": {"$eq": mongo_date}})["People"]
     print(f"Full session details:\n{after}")
     still_unpaid = get_unpaid()
     if still_unpaid:
@@ -189,11 +190,10 @@ def find_in_existing_mappings(account_id: str) -> str:
 
 
 def identify_payer(account_id: str, amount: float) -> str:
-    """e.g. Steve L, Ali I: previous alias is not in current session"""
-    # TODO: test that this works the second time round (i.e. once in mappings)
     coll = MongoClient().money.badminton
     mappings = coll.find_one({"_id": "AccountMappings"})
     if account_id in mappings:
+        """e.g. Steve L, Ali I: previous alias is not in current session"""
         old_alias = mappings[account_id]
         if isinstance(old_alias, list):
             old_alias = old_alias[0]
@@ -229,13 +229,11 @@ def handle_non_transfer_payments():
 def sorting_out_multi_person_payments(per_person_cost: float):
     coll = MongoClient().money.badminton
     for attendee in get_all_attendees():
-        # print(f"<multi> Processing {attendee} . . . ")
         session_record = coll.find_one({"Date": {"$eq": session_date.datetime},
                                         "People": {"$exists": True}})
         # TODO: maybe don't need to check existence of "People" key?
         for type_of_payment in ("transfer", "cash", "host"):
             if type_of_payment in session_record["People"][attendee]:
-                # print(f"\tThey paid {session_record[attendee][type_of_payment]:.2f}")
                 amount_paid = session_record["People"][attendee][type_of_payment]
                 excess = amount_paid - per_person_cost
                 while excess > 0.1:
@@ -362,7 +360,7 @@ def get_total_payments(session: dict, payment_type: str = "transfer") -> float:
                 if isinstance(v, dict) and payment_type in v])
 
 
-session_date = latest_perse_time()
+session_date = get_latest_perse_time()
 
 
 if __name__ == "__main__":
