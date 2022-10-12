@@ -31,10 +31,7 @@ def ensure_uniqueness(names: [str]) -> [str]:
 def list_of_names_from_whatsapp(pasted_list: str) -> [str]:
     def extract_name(row: str) -> str:
         if row:
-            if "." in row:
-                dot_index = row.index(".")
-                row = row[dot_index + 1:]
-            return row.replace(".", "").strip().title()
+            return row.strip(" .1234567890").title()
         return ""
 
     names = pasted_list.split("\n")
@@ -156,7 +153,7 @@ def monday_process(pasted_text: str = "") -> None:
     for df_index in bank_df.index:
         account_id = bank_df.loc[df_index]["Account ID"]
         payment_amount = bank_df.loc[df_index]["Value"]
-        paying_attendee = find_in_existing_mappings(account_id)
+        paying_attendee = find_attendee_in_mappings(account_id)
         if not paying_attendee:
             paying_attendee = identify_payer(account_id, payment_amount)
         if paying_attendee:
@@ -174,7 +171,7 @@ def monday_process(pasted_text: str = "") -> None:
     print(f"So far have received \n{payments_string}\nfor this session.")
 
 
-def find_in_existing_mappings(account_id: str) -> str:
+def find_attendee_in_mappings(account_id: str) -> str:
     coll = MongoClient().money.badminton
     mappings = coll.find_one({"_id": "AccountMappings"})
     if account_id in mappings:
@@ -192,38 +189,34 @@ def find_in_existing_mappings(account_id: str) -> str:
 def identify_payer(account_id: str, amount: float) -> str:
     coll = MongoClient().money.badminton
     mappings = coll.find_one({"_id": "AccountMappings"})
+    old_alias = ""
     if account_id in mappings:
         """e.g. Steve L, Ali I: previous alias is not in current session"""
         old_alias = mappings[account_id]
         if isinstance(old_alias, list):
             old_alias = old_alias[0]
-        new_alias = get_new_alias_from_input(account_id, amount, clue=old_alias)
-        set_new_alias(account_id, new_alias)
-    else:
-        """previously un-encountered account id"""
-        new_alias = get_new_alias_from_input(account_id, amount)
+    """else previously un-encountered account id"""
+    new_alias = get_new_alias_from_input(account_id, amount, clue=old_alias)
+    if new_alias:
         set_new_alias(account_id, new_alias)
     return new_alias
 
 
 def handle_non_transfer_payments():
     special_cases = (
-        ("cash", "Did anyone else pay in cash?"),
-        ("no show", "Were there any more no-shows?")
+        ("cash", "How many people paid in cash?"),
+        ("no show", "How many no-shows were there?")
     )
     for case, question in special_cases:
-        if input(f"{question} ") in "yY":
-            attendee = True
-            while attendee:
-                attendee, amount = pick_name_from_unpaid("Who"), 0
-                if attendee:
-                    if case == "cash":
-                        amount = float(input(f"How much did {attendee} pay?\n\t£"))
-                    record_payment(attendee, amount, case)
-                if not get_unpaid():
-                    break
         if not get_unpaid():
             break
+        no_of_people = int(input(f"{question} "))
+        for _ in range(no_of_people):
+            attendee, amount = pick_name_from_unpaid("Who"), 0
+            if attendee:
+                if case == "cash":
+                    amount = float(input(f"How much did {attendee} pay?\n\t£"))
+                record_payment(attendee, amount, case)
 
 
 def sorting_out_multi_person_payments(per_person_cost: float):
@@ -296,6 +289,9 @@ def get_new_alias_from_input(account_name: str,
                        key=lambda s: initials.index(s[0]))
     hint = f" (previously known as {clue})" if clue else ""
     for group in (shortlist, not_paid):
+        # TODO: should be able to choose to Ignore first time around
+        #   (e.g. for someone who paid for something else and therefore
+        #     is not on the attendee list)
         question = f"Who is {account_name}{hint}?  (They paid £{amount:.2f})"
         identified_attendee = pick_name_from(group, question)
         if identified_attendee:
