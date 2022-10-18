@@ -4,11 +4,31 @@ import argparse
 import pandas as pd
 from io import StringIO
 import pathlib
+import google_sheets_reader as gsr
 
 
 def set_session_date(new_date: arrow.Arrow):
     global session_date
     session_date = new_date
+
+
+def list_of_names_from_google_sheet() -> [str]:
+    return clean_name_list(gsr.get_latest_attendee_list(session_date))
+
+
+def list_of_names_from_whatsapp(pasted_list: str) -> [str]:
+    return clean_name_list(pasted_list.split("\n"))
+
+
+def clean_name_list(names: [str]) -> [str]:
+    def extract_name(row: str) -> str:
+        if row:
+            return row.strip(" .1234567890").title()
+        return ""
+
+    names = [*filter(lambda x: x, [extract_name(n) for n in names])]
+    names = ensure_uniqueness(names)
+    return names
 
 
 def ensure_uniqueness(names: [str]) -> [str]:
@@ -28,29 +48,19 @@ def ensure_uniqueness(names: [str]) -> [str]:
     return unique_names
 
 
-def list_of_names_from_whatsapp(pasted_list: str) -> [str]:
-    def extract_name(row: str) -> str:
-        if row:
-            return row.strip(" .1234567890").title()
-        return ""
-
-    names = pasted_list.split("\n")
-    names = [*filter(lambda x: x, [extract_name(n) for n in names])]
-    names = ensure_uniqueness(names)
-    return names
-
-
 def create_session(people: [str]):
     collection = MongoClient().money.badminton
     mongo_date = session_date.datetime
-    date_query = {"Date": {"$eq": mongo_date}}
-    if collection.find_one(date_query):
+    datetime_query = {"Date": {"$eq": mongo_date}}
+    if collection.find_one(datetime_query):
         if input(f"Session already exists for {session_date.format('ddd Do MMMM')}, "
                  f"overwrite? ") in "nN":
             return
-        collection.delete_many(date_query)
-    document = {"People": {name: {} for name in people}}
-    document["Date"] = mongo_date
+        collection.delete_many(datetime_query)
+    document = {
+        "Date": mongo_date,
+        "People": {name: {} for name in people}
+    }
     collection.insert_one(document)
 
 
@@ -75,15 +85,17 @@ def time_machine(requested_date: arrow.Arrow) -> arrow.Arrow:
 
 
 def run_in_add_session_mode(names: str = ""):
+    """expects a \n-delimited string of names when used for testing"""
     if names:
-        raw_names = names
+        raw_names = list_of_names_from_whatsapp(names)
     else:
-        raw_names = multi_line_input("Please paste in the list of names from WhatsApp: ")
-    name_list = list_of_names_from_whatsapp(raw_names)
+        raw_names = list_of_names_from_google_sheet()
+    name_list = clean_name_list(raw_names)
     create_session(name_list)
 
 
 def account_mappings_from_raw(raw: str) -> dict:
+    """for use only in testing or to migrate from google sheets list"""
     mappings = {}
     for row in raw.split("\n"):
         k, v = (m for m in row.split("\t"))
@@ -115,7 +127,7 @@ def create_nationwide_dataset(passed_data: str = "") -> pd.DataFrame:
 
 
 def clean_nationwide_data(df_bank: pd.DataFrame) -> pd.DataFrame:
-    """assumes that earliest payments are received the day after the session"""
+    """assumes Sat. post-session to Fri. inclusive window in which payments are made"""
     next_saturday = session_date.shift(days=8).date()
     df_bank["Date"] = pd.to_datetime(df_bank["Date"])
     df_bank["Account ID"] = df_bank["Account ID"].str[12:]
@@ -139,7 +151,7 @@ def get_latest_nationwide_csv_filename() -> str:
     return ""
 
 
-def monday_process(pasted_text: str = "") -> None:
+def monday_process() -> None:
     coll = MongoClient().money.badminton
     mongo_date = session_date.datetime
     attendees = coll.find_one({"Date": {"$eq": mongo_date}})["People"]
@@ -149,7 +161,7 @@ def monday_process(pasted_text: str = "") -> None:
     if me in attendees:
         record_payment(me, per_person_cost, "host")
 
-    bank_df = create_nationwide_dataset(pasted_text)
+    bank_df = create_nationwide_dataset()
     for df_index in bank_df.index:
         account_id = bank_df.loc[df_index]["Account ID"]
         payment_amount = bank_df.loc[df_index]["Value"]
@@ -162,13 +174,14 @@ def monday_process(pasted_text: str = "") -> None:
     sorting_out_multi_person_payments(per_person_cost)
 
     after = coll.find_one({"Date": {"$eq": mongo_date}})["People"]
-    print(f"Full session details:\n{after}")
-    still_unpaid = get_unpaid()
-    if still_unpaid:
-        print(f"{still_unpaid} have not paid.  That is {len(still_unpaid)} people.")
+    # remove the next line: interrogate from Jupyter notebook if needed
+    # print(f"Full session details:\n{after}")
     payments_string = "\n".join([f"\t£{get_total_payments(after, t):.2f} in {t}"
                                  for t in ("transfer", "host", "cash")])
     print(f"So far have received \n{payments_string}\nfor this session.")
+    still_unpaid = get_unpaid()
+    if still_unpaid:
+        print(f"{still_unpaid} have not paid.  That is {len(still_unpaid)} people.")
 
 
 def find_attendee_in_mappings(account_id: str) -> str:
@@ -187,6 +200,7 @@ def find_attendee_in_mappings(account_id: str) -> str:
 
 
 def identify_payer(account_id: str, amount: float) -> str:
+    """for when account name did not match with any attendee name"""
     coll = MongoClient().money.badminton
     mappings = coll.find_one({"_id": "AccountMappings"})
     old_alias = ""
@@ -301,9 +315,10 @@ def get_new_alias_from_input(account_name: str,
 
 def show_options_list(options: [str]) -> str:
     option_list = [f"[{i + 1}] {name}" for i, name in enumerate(options)] + \
-                  ["[?] Don't know / Ignore"]
+                  ["[?] Don't know", "[I] Ignore"]
     # TODO: see Vania's train payment.  Want to be able to ignore it the first time
     #       around, not be forced to pick from the list and hit '?' again
+    # TODO: consider adding the ability to allocate payment to a previous session
     display_string = ""
     max_line_length = 72
     while option_list:
@@ -351,8 +366,8 @@ def get_all_attendees() -> [str]:
     return [*session_people.keys()]
 
 
-def get_total_payments(session: dict, payment_type: str = "transfer") -> float:
-    return sum([v[payment_type] for v in session.values()
+def get_total_payments(session_people: dict, payment_type: str = "transfer") -> float:
+    return sum([v[payment_type] for v in session_people.values()
                 if isinstance(v, dict) and payment_type in v])
 
 
