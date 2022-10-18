@@ -64,12 +64,6 @@ def create_session(people: [str]):
     collection.insert_one(document)
 
 
-def multi_line_input(prompt: str) -> str:
-    print(prompt)
-    sentinel = ""
-    return '\n'.join(iter(input, sentinel))
-
-
 def get_latest_perse_time(request_time: arrow.Arrow = arrow.now(tz="local")) -> arrow.Arrow:
     week = arrow.Arrow.range(frame="days",
                              start=request_time.shift(days=-7),
@@ -82,16 +76,6 @@ def time_machine(requested_date: arrow.Arrow) -> arrow.Arrow:
     """Get time of most recent Perse session for a given date.
     If a Friday is requested, it will return session time on the same day"""
     return get_latest_perse_time(requested_date.shift(days=1).to("local"))
-
-
-def run_in_add_session_mode(names: str = ""):
-    """expects a \n-delimited string of names when used for testing"""
-    if names:
-        raw_names = list_of_names_from_whatsapp(names)
-    else:
-        raw_names = list_of_names_from_google_sheet()
-    name_list = clean_name_list(raw_names)
-    create_session(name_list)
 
 
 def account_mappings_from_raw(raw: str) -> dict:
@@ -152,6 +136,7 @@ def get_latest_nationwide_csv_filename() -> str:
 
 
 def monday_process() -> None:
+    create_session(clean_name_list(list_of_names_from_google_sheet()))
     coll = MongoClient().money.badminton
     mongo_date = session_date.datetime
     attendees = coll.find_one({"Date": {"$eq": mongo_date}})["People"]
@@ -174,8 +159,6 @@ def monday_process() -> None:
     sorting_out_multi_person_payments(per_person_cost)
 
     after = coll.find_one({"Date": {"$eq": mongo_date}})["People"]
-    # remove the next line: interrogate from Jupyter notebook if needed
-    # print(f"Full session details:\n{after}")
     payments_string = "\n".join([f"\t£{get_total_payments(after, t):.2f} in {t}"
                                  for t in ("transfer", "host", "cash")])
     print(f"So far have received \n{payments_string}\nfor this session.")
@@ -266,16 +249,16 @@ def sorting_out_multi_person_payments(per_person_cost: float):
                         record_payment(attendee, per_person_cost, type_of_payment, False)
 
 
-def set_new_alias(account_name: str, alias: object):
+def set_new_alias(account_name: str, alias: str):
     """alias can be string or list of strings"""
     coll = MongoClient().money.badminton
-    existing_alias = None
     mappings = coll.find_one({"_id": "AccountMappings"})
     if mappings and account_name in mappings:
         existing_alias = mappings[account_name]
-        if isinstance(existing_alias, str):
-            existing_alias = [existing_alias]
-            alias = existing_alias + [alias]
+        list_to_add_to = existing_alias if isinstance(existing_alias, list) \
+            else [existing_alias]
+        list_to_add_to.append(alias)
+        alias = list_to_add_to
     coll.update_one({"_id": "AccountMappings"},
                     {"$set": {account_name: alias}})
 
@@ -371,6 +354,28 @@ def get_total_payments(session_people: dict, payment_type: str = "transfer") -> 
                 if isinstance(v, dict) and payment_type in v])
 
 
+def generate_sign_up_message(wa_pasting: str) -> str:
+    # TODO: operate with a different host
+    upcoming_friday = time_machine(arrow.now().shift(days=7))
+    header = f"Booked (by James), Perse Upper School, " \
+             f"{upcoming_friday.format('dddd, Do MMMM YYYY')}, 19:30 - 21:30:" \
+             f"\n\nUp to 6 courts, max. 33 players\n\n"
+
+    def extract_name(raw_data: str) -> str:
+        #     print(raw_data.partition(': '))
+        subsequent_name, _, name = raw_data.partition(': ')
+        if subsequent_name and "[" not in subsequent_name:
+            return subsequent_name
+        return name
+
+    names = ["James (Host)"] + [extract_name(m) for m in wa_pasting.split('\n')]
+    names = [*filter(lambda text: text and len(text.split(" ")) < 3, names)]
+    in_list = "\n".join([f"{i + 1}. {nm}" for i, nm in enumerate(names[:33])])
+    waitlist = "\n".join([f"{chr(97 + j)}. {wnm}" for j, wnm in enumerate(names[33:])])
+    return f"{header}{in_list}\n\nWAITLIST:\n{waitlist}\n...\n" \
+           f"(copy and paste, adding your name to secure a spot)"
+
+
 session_date = get_latest_perse_time()
 
 
@@ -382,10 +387,8 @@ if __name__ == "__main__":
                            help='either [F] set up a new session or [M] process payments for existing session')
     args = my_parser.parse_args()
     op = args.Operation
-    if op == "F":
-        run_in_add_session_mode()
-    elif op == "M":
-        monday_process("")
+    if op == "M":
+        monday_process()
     else:
         print(f"{op} is not a valid operation code")
 
