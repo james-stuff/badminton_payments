@@ -12,8 +12,8 @@ def set_session_date(new_date: arrow.Arrow):
     session_date = new_date
 
 
-def list_of_names_from_google_sheet() -> [str]:
-    return clean_name_list(gsr.get_latest_attendee_list(session_date))
+def session_data_from_google_sheet() -> dict:
+    return gsr.get_session_data(session_date)
 
 
 def list_of_names_from_whatsapp(pasted_list: str) -> [str]:
@@ -48,7 +48,8 @@ def ensure_uniqueness(names: [str]) -> [str]:
     return unique_names
 
 
-def create_session(people: [str]):
+def create_session():
+    google_data = session_data_from_google_sheet()
     collection = MongoClient().money.badminton
     mongo_date = session_date.datetime
     datetime_query = {"Date": {"$eq": mongo_date}}
@@ -57,10 +58,10 @@ def create_session(people: [str]):
                  f"overwrite? ") in "nN":
             return
         collection.delete_many(datetime_query)
-    document = {
-        "Date": mongo_date,
-        "People": {name: {} for name in people}
-    }
+        # TODO: maybe allow editing here?
+    document = {k: v for k, v in google_data.items() if k != "Col A"}
+    document["Date"] = mongo_date
+    document["People"] = {name: {} for name in clean_name_list(google_data["Col A"])}
     collection.insert_one(document)
 
 
@@ -78,24 +79,9 @@ def time_machine(requested_date: arrow.Arrow) -> arrow.Arrow:
     return get_latest_perse_time(requested_date.shift(days=1).to("local"))
 
 
-def account_mappings_from_raw(raw: str) -> dict:
-    """for use only in testing or to migrate from google sheets list"""
-    mappings = {}
-    for row in raw.split("\n"):
-        k, v = (m for m in row.split("\t"))
-        mappings[k] = v
-    return mappings
-
-
-def migrate_mappings_to_mongo(raw_mappings: str):
-    record = {"_id": "AccountMappings"}
-    collection = MongoClient().money.badminton
-    if not collection.find_one(record):
-        collection.insert_one(record)
-    collection.update_one(record, {"$set": account_mappings_from_raw(raw_mappings)})
-
-
 def create_nationwide_dataset(passed_data: str = "") -> pd.DataFrame:
+    # TODO: fail gracefully if file not found
+    #   perhaps also not overwrite a session until valid data is found?
     csv_input = StringIO(passed_data)
     kw_args = {"names": ["Date", "Account ID", "AC Num", "Blank", "Value", "Balance"]}
     if passed_data:
@@ -129,19 +115,21 @@ def clean_nationwide_data(df_bank: pd.DataFrame) -> pd.DataFrame:
 
 def get_latest_nationwide_csv_filename() -> str:
     downloads_folder = pathlib.Path("C:\\Users\\j_a_c\\Downloads")
-    file_listing = downloads_folder.glob("Statement Download*.csv")
+    file_listing = [*downloads_folder.glob("Statement Download*.csv")]
     if file_listing:
         return str(max(file_listing, key=lambda file: file.stat().st_ctime))
     return ""
 
 
 def monday_process() -> None:
-    create_session(clean_name_list(list_of_names_from_google_sheet()))
+    create_session()
     coll = MongoClient().money.badminton
     mongo_date = session_date.datetime
-    attendees = coll.find_one({"Date": {"$eq": mongo_date}})["People"]
+    session = coll.find_one({"Date": {"$eq": mongo_date}})
+    attendees = session["People"]
 
-    per_person_cost = float(input("Please enter the amount charged per person: £"))
+    # per_person_cost = float(input("Please enter the amount charged per person: £"))
+    per_person_cost = session["Amount Charged"]
     me = "James (Host)"
     if me in attendees:
         record_payment(me, per_person_cost, "host")
@@ -289,6 +277,7 @@ def get_new_alias_from_input(account_name: str,
         # TODO: should be able to choose to Ignore first time around
         #   (e.g. for someone who paid for something else and therefore
         #     is not on the attendee list)
+        # TODO: also would like to be able to allocate against past session
         question = f"Who is {account_name}{hint}?  (They paid £{amount:.2f})"
         identified_attendee = pick_name_from(group, question)
         if identified_attendee:
@@ -302,6 +291,8 @@ def show_options_list(options: [str]) -> str:
     # TODO: see Vania's train payment.  Want to be able to ignore it the first time
     #       around, not be forced to pick from the list and hit '?' again
     # TODO: consider adding the ability to allocate payment to a previous session
+    # ToDO: probably add one-off payments to a separate document so can view
+    #       at end of month
     display_string = ""
     max_line_length = 72
     while option_list:
@@ -356,13 +347,12 @@ def get_total_payments(session_people: dict, payment_type: str = "transfer") -> 
 
 def generate_sign_up_message(wa_pasting: str) -> str:
     # TODO: operate with a different host
-    upcoming_friday = time_machine(arrow.now().shift(days=7))
+    friday = time_machine(arrow.now().shift(days=7))
     header = f"Booked (by James), Perse Upper School, " \
-             f"{upcoming_friday.format('dddd, Do MMMM YYYY')}, 19:30 - 21:30:" \
+             f"{friday.format('dddd, Do MMMM YYYY')}, 19:30 - 21:30:" \
              f"\n\nUp to 6 courts, max. 33 players\n\n"
 
     def extract_name(raw_data: str) -> str:
-        #     print(raw_data.partition(': '))
         subsequent_name, _, name = raw_data.partition(': ')
         if subsequent_name and "[" not in subsequent_name:
             return subsequent_name
@@ -376,6 +366,43 @@ def generate_sign_up_message(wa_pasting: str) -> str:
            f"(copy and paste, adding your name to secure a spot)"
 
 
+def create_next_session_sheet():
+    """add a new sheet to the Google sheet for the month in required format"""
+    next_friday = time_machine(get_latest_perse_time().shift(days=7))
+    print(f"This'll create a sheet for {next_friday.format('Do MMM')}")
+
+
+def court_rate_in_force(date: arrow.Arrow) -> float:
+    rates = MongoClient().money.badminton.find_one({"_id": "Perse Rates"})
+    del rates["_id"]
+    latest_date = max([k for k in rates.keys() if arrow.get(k) <= date])
+    return rates[latest_date]
+
+
+def invoices():
+    # req_month = input("Which month would you like to look at? [MM(-YY)] ")
+    req_month = "10"
+    year = arrow.now().year
+    if len(req_month) < 3:
+        month = int(req_month)
+    else:
+        month = int(req_month[:req_month.index("-")])
+        year = int(f"20{req_month[-2:]}")
+    coll = MongoClient().money.badminton
+    first_of_month = arrow.Arrow(year, month, 1)
+    sessions = coll.find(
+        {"Date": {"$gt": arrow.Arrow(year, month, 14).datetime,
+                  "$lt": first_of_month.ceil("month").datetime}})
+    print(f"\nExpected Perse School Invoice for "
+          f"{first_of_month.format('MMMM YYYY').upper()}:")
+    print(f"\nDate\tCourts\tCost\tTransfers")
+    for s in sessions:
+        date = arrow.get(s['Date'])
+        cost = int(s['Courts']) * 2 * court_rate_in_force(date)
+        print(f"{date.format('Do'):>7}\t{s['Courts']:>6}\t£{cost:>6.2f}"
+              f"\t£{get_total_payments(s['People']):>6.2f}")
+
+
 session_date = get_latest_perse_time()
 
 
@@ -386,9 +413,15 @@ if __name__ == "__main__":
                            type=str,
                            help='either [F] set up a new session or [M] process payments for existing session')
     args = my_parser.parse_args()
-    op = args.Operation
-    if op == "M":
-        monday_process()
+    op = args.Operation.upper()
+
+    options = {
+        "M": monday_process,
+        "F": create_next_session_sheet,
+        "I": invoices,
+    }
+    if op in options:
+        options[op]()
     else:
         print(f"{op} is not a valid operation code")
 
