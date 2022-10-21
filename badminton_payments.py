@@ -142,6 +142,9 @@ def monday_process() -> None:
         if not paying_attendee:
             paying_attendee = identify_payer(account_id, payment_amount)
         if paying_attendee:
+            if payment_amount >= 2 * per_person_cost:
+                payment_amount = pay_obo(paying_attendee, payment_amount,
+                                         per_person_cost)
             record_payment(paying_attendee, payment_amount)
     handle_non_transfer_payments()
     sorting_out_multi_person_payments(per_person_cost)
@@ -153,6 +156,20 @@ def monday_process() -> None:
     still_unpaid = get_unpaid()
     if still_unpaid:
         print(f"{still_unpaid} have not paid.  That is {len(still_unpaid)} people.")
+
+
+def pay_obo(donor: str, transfer_value: float, cost: float) -> float:
+    coll = MongoClient().money.badminton
+    doc_obo = coll.find_one({"_id": "PaymentsOBO"})
+    if donor not in doc_obo:
+        return transfer_value
+    amount_remaining = transfer_value
+    possibles = filter(lambda a: a in doc_obo[donor], get_unpaid())
+    for p in possibles:
+        if amount_remaining > cost:
+            record_payment(p, cost)
+            amount_remaining -= cost
+    return amount_remaining
 
 
 def find_attendee_in_mappings(account_id: str) -> str:
@@ -207,9 +224,7 @@ def handle_non_transfer_payments():
 def sorting_out_multi_person_payments(per_person_cost: float):
     coll = MongoClient().money.badminton
     for attendee in get_all_attendees():
-        session_record = coll.find_one({"Date": {"$eq": session_date.datetime},
-                                        "People": {"$exists": True}})
-        # TODO: maybe don't need to check existence of "People" key?
+        session_record = coll.find_one({"Date": {"$eq": session_date.datetime}})
         for type_of_payment in ("transfer", "cash", "host"):
             if type_of_payment in session_record["People"][attendee]:
                 amount_paid = session_record["People"][attendee][type_of_payment]
@@ -230,11 +245,23 @@ def sorting_out_multi_person_payments(per_person_cost: float):
                         amount_paid -= per_person_cost
                         record_payment(attendee, amount_paid, type_of_payment, False)
                         record_payment(recipient, per_person_cost, type_of_payment)
+                        add_to_payments_obo(attendee, recipient)
                     elif int(choice) == 2:
                         excess = 0
                     elif int(choice) == 3:
                         excess = 0
                         record_payment(attendee, per_person_cost, type_of_payment, False)
+
+
+def add_to_payments_obo(donor: str, recipient: str):
+    coll = MongoClient().money.badminton
+    query = {"_id": "PaymentsOBO"}
+    record = coll.find_one(query)
+    if donor in record:
+        record[donor] = record[donor] + [recipient]
+    else:
+        record[donor] = [recipient]
+    coll.update_one(query, {"$set": record})
 
 
 def set_new_alias(account_name: str, alias: str):
@@ -380,8 +407,8 @@ def court_rate_in_force(date: arrow.Arrow) -> float:
 
 
 def invoices():
-    # req_month = input("Which month would you like to look at? [MM(-YY)] ")
-    req_month = "10"
+    req_month = input("Which month would you like to look at? [MM(-YY)] ")
+    # req_month = "10"
     year = arrow.now().year
     if len(req_month) < 3:
         month = int(req_month)
@@ -391,7 +418,8 @@ def invoices():
     coll = MongoClient().money.badminton
     first_of_month = arrow.Arrow(year, month, 1)
     sessions = coll.find(
-        {"Date": {"$gt": arrow.Arrow(year, month, 14).datetime,
+        {"Date": {"$gt": first_of_month.datetime,
+        # {"Date": {"$gt": arrow.Arrow(year, month, 14).datetime,
                   "$lt": first_of_month.ceil("month").datetime}})
     print(f"\nExpected Perse School Invoice for "
           f"{first_of_month.format('MMMM YYYY').upper()}:")
