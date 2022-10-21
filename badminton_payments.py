@@ -4,7 +4,7 @@ import argparse
 import pandas as pd
 from io import StringIO
 import pathlib
-import google_sheets_reader as gsr
+import google_sheets_interface as gsi
 
 
 def set_session_date(new_date: arrow.Arrow):
@@ -13,7 +13,7 @@ def set_session_date(new_date: arrow.Arrow):
 
 
 def session_data_from_google_sheet() -> dict:
-    return gsr.get_session_data(session_date)
+    return gsi.get_session_data(session_date)
 
 
 def list_of_names_from_whatsapp(pasted_list: str) -> [str]:
@@ -397,6 +397,7 @@ def create_next_session_sheet():
     """add a new sheet to the Google sheet for the month in required format"""
     next_friday = time_machine(get_latest_perse_time().shift(days=7))
     print(f"This'll create a sheet for {next_friday.format('Do MMM')}")
+    gsi.create_new_session_sheet(next_friday)
 
 
 def court_rate_in_force(date: arrow.Arrow) -> float:
@@ -408,13 +409,12 @@ def court_rate_in_force(date: arrow.Arrow) -> float:
 
 def invoices():
     req_month = input("Which month would you like to look at? [MM(-YY)] ")
-    # req_month = "10"
     year = arrow.now().year
     if len(req_month) < 3:
         month = int(req_month)
     else:
-        month = int(req_month[:req_month.index("-")])
-        year = int(f"20{req_month[-2:]}")
+        month, _, yy = req_month.partition("-")
+        month, year = int(month), int(f"20{yy}")
     coll = MongoClient().money.badminton
     first_of_month = arrow.Arrow(year, month, 1)
     sessions = coll.find(
