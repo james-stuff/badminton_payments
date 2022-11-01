@@ -51,21 +51,20 @@ def ensure_uniqueness(names: [str]) -> [str]:
 
 def create_session():
     google_data = session_data_from_google_sheet()
-    collection = MongoClient().money.badminton
     mongo_date = session_date.datetime
     datetime_query = {"Date": {"$eq": mongo_date}}
-    if collection.find_one(datetime_query):
+    if coll.find_one(datetime_query):
         if input(f"Session already exists for {session_date.format('ddd Do MMMM')}, "
                  f"overwrite? ") in "nN":
             # TODO: this alone does not stop the session being processed
             #       and will result in double-counted payments
             return
-        collection.delete_many(datetime_query)
+        coll.delete_many(datetime_query)
         # TODO: maybe allow editing here?  Or select a previous session
     document = {k: v for k, v in google_data.items() if k != "Col A"}
     document["Date"] = mongo_date
     document["People"] = {name: {} for name in clean_name_list(google_data["Col A"])}
-    collection.insert_one(document)
+    coll.insert_one(document)
 
 
 def get_latest_perse_time(request_time: arrow.Arrow = arrow.now(tz="local")) -> arrow.Arrow:
@@ -126,7 +125,6 @@ def get_latest_nationwide_csv_filename() -> str:
 
 def monday_process() -> None:
     create_session()
-    coll = MongoClient().money.badminton
     mongo_date = session_date.datetime
     session = coll.find_one({"Date": {"$eq": mongo_date}})
     attendees = session["People"]
@@ -163,7 +161,6 @@ def monday_process() -> None:
 
 def pay_obo(donor: str, transfer_value: float, cost: float) -> float:
     # TODO: write paying account id?
-    coll = MongoClient().money.badminton
     doc_obo = coll.find_one({"_id": "PaymentsOBO"})
     if donor not in doc_obo:
         return transfer_value
@@ -177,7 +174,6 @@ def pay_obo(donor: str, transfer_value: float, cost: float) -> float:
 
 
 def find_attendee_in_mappings(account_id: str) -> str:
-    coll = MongoClient().money.badminton
     mappings = coll.find_one({"_id": "AccountMappings"})
     if account_id in mappings:
         alias = mappings[account_id]
@@ -193,7 +189,6 @@ def find_attendee_in_mappings(account_id: str) -> str:
 
 def identify_payer(account_id: str, amount: float) -> str:
     """for when account name did not match with any attendee name"""
-    coll = MongoClient().money.badminton
     mappings = coll.find_one({"_id": "AccountMappings"})
     old_alias = ""
     if account_id in mappings:
@@ -226,7 +221,6 @@ def handle_non_transfer_payments():
 
 
 def sorting_out_multi_person_payments(per_person_cost: float):
-    coll = MongoClient().money.badminton
     for attendee in get_all_attendees():
         session_record = coll.find_one({"Date": {"$eq": session_date.datetime}})
         for type_of_payment in ("transfer", "cash", "host"):
@@ -258,7 +252,6 @@ def sorting_out_multi_person_payments(per_person_cost: float):
 
 
 def add_to_payments_obo(donor: str, recipient: str):
-    coll = MongoClient().money.badminton
     query = {"_id": "PaymentsOBO"}
     record = coll.find_one(query)
     if donor in record:
@@ -270,7 +263,6 @@ def add_to_payments_obo(donor: str, recipient: str):
 
 def set_new_alias(account_name: str, alias: str):
     """alias can be string or list of strings"""
-    coll = MongoClient().money.badminton
     mappings = coll.find_one({"_id": "AccountMappings"})
     if mappings and account_name in mappings:
         existing_alias = mappings[account_name]
@@ -345,7 +337,6 @@ def show_options_list(options: [str]) -> str:
 def record_payment(attendee: str, amount: float,
                    payment_type: str = "transfer",
                    keep_previous_payment: bool = True):
-    coll = MongoClient().money.badminton
     previous_amount = 0
     session_record = coll.find_one({"Date": {"$eq": session_date.datetime},
                                     "People": {"$exists": True}})
@@ -360,13 +351,11 @@ def record_payment(attendee: str, amount: float,
 
 
 def get_unpaid() -> [str]:
-    coll = MongoClient().money.badminton
     session_people = coll.find_one({"Date": {"$eq": session_date.datetime}})["People"]
     return [k for k in session_people if not session_people[k]]
 
 
 def get_all_attendees() -> [str]:
-    coll = MongoClient().money.badminton
     session_people = coll.find_one({"Date": {"$eq": session_date.datetime}})["People"]
     return [*session_people.keys()]
 
@@ -413,7 +402,7 @@ def create_next_session_sheet():
 
 
 def court_rate_in_force(date: arrow.Arrow) -> float:
-    rates = MongoClient().money.badminton.find_one({"_id": "Perse Rates"})
+    rates = coll.find_one({"_id": "Perse Rates"})
     del rates["_id"]
     latest_date = max([k for k in rates.keys() if arrow.get(k) <= date])
     return rates[latest_date]
@@ -427,7 +416,6 @@ def invoices():
     else:
         month, _, yy = req_month.partition("-")
         month, year = int(month), int(f"20{yy}")
-    coll = MongoClient().money.badminton
     first_of_month = arrow.Arrow(year, month, 1)
     sessions = coll.find(
         {"Date": {"$gt": first_of_month.datetime,
@@ -444,6 +432,7 @@ def invoices():
 
 
 session_date = get_latest_perse_time()
+coll = MongoClient().money.badminton
 
 
 if __name__ == "__main__":
