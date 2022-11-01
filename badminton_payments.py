@@ -17,6 +17,7 @@ def session_data_from_google_sheet() -> dict:
 
 
 def list_of_names_from_whatsapp(pasted_list: str) -> [str]:
+    """used only in testing"""
     return clean_name_list(pasted_list.split("\n"))
 
 
@@ -56,9 +57,11 @@ def create_session():
     if collection.find_one(datetime_query):
         if input(f"Session already exists for {session_date.format('ddd Do MMMM')}, "
                  f"overwrite? ") in "nN":
+            # TODO: this alone does not stop the session being processed
+            #       and will result in double-counted payments
             return
         collection.delete_many(datetime_query)
-        # TODO: maybe allow editing here?
+        # TODO: maybe allow editing here?  Or select a previous session
     document = {k: v for k, v in google_data.items() if k != "Col A"}
     document["Date"] = mongo_date
     document["People"] = {name: {} for name in clean_name_list(google_data["Col A"])}
@@ -159,6 +162,7 @@ def monday_process() -> None:
 
 
 def pay_obo(donor: str, transfer_value: float, cost: float) -> float:
+    # TODO: write paying account id?
     coll = MongoClient().money.badminton
     doc_obo = coll.find_one({"_id": "PaymentsOBO"})
     if donor not in doc_obo:
@@ -372,8 +376,7 @@ def get_total_payments(session_people: dict, payment_type: str = "transfer") -> 
                 if isinstance(v, dict) and payment_type in v])
 
 
-def generate_sign_up_message(wa_pasting: str) -> str:
-    # TODO: operate with a different host
+def generate_sign_up_message(wa_pasting: str, host: str = "James") -> str:
     friday = time_machine(arrow.now().shift(days=7))
     header = f"Booked (by James), Perse Upper School, " \
              f"{friday.format('dddd, Do MMMM YYYY')}, 19:30 - 21:30:" \
@@ -385,7 +388,7 @@ def generate_sign_up_message(wa_pasting: str) -> str:
             return subsequent_name
         return name
 
-    names = ["James (Host)"] + [extract_name(m) for m in wa_pasting.split('\n')]
+    names = [f"{host} (Host)"] + [extract_name(m) for m in wa_pasting.split('\n')]
     names = [*filter(lambda text: text and len(text.split(" ")) < 3, names)]
     in_list = "\n".join([f"{i + 1}. {nm}" for i, nm in enumerate(names[:33])])
     waitlist = "\n".join([f"{chr(97 + j)}. {wnm}" for j, wnm in enumerate(names[33:])])
@@ -398,6 +401,15 @@ def create_next_session_sheet():
     next_friday = time_machine(get_latest_perse_time().shift(days=7))
     print(f"This'll create a sheet for {next_friday.format('Do MMM')}")
     gsi.create_new_session_sheet(next_friday)
+    # TODO: should set courts to 6 and cash payments to zero
+    #  and can I make the new sheet the one you land on when opening spreadsheet?
+    # TODO: how long do the credentials stay valid for?
+    #       Maybe delete the token file if it is of more than a certain age?
+    #   From google: "How long do Google API tokens last?
+    # A Google Cloud Platform project with an OAuth consent screen configured
+    #  for an external user type and a publishing status of "Testing" is
+    #  issued a refresh token expiring in 7 days. There is currently a
+    #  limit of 100 refresh tokens per Google Account per OAuth 2.0 client ID."
 
 
 def court_rate_in_force(date: arrow.Arrow) -> float:
