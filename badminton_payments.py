@@ -399,6 +399,10 @@ def create_next_session_sheet():
     #  for an external user type and a publishing status of "Testing" is
     #  issued a refresh token expiring in 7 days. There is currently a
     #  limit of 100 refresh tokens per Google Account per OAuth 2.0 client ID."
+    # TODO: process of creating a new tab didn't work when new monthly sheet
+    #       needed to be created (for 4th Nov session)
+    # TODO: running 'Friday' process on a Monday generates a tab for the
+    #       upcoming Friday, not the previous one
 
 
 def court_rate_in_force(date: arrow.Arrow) -> float:
@@ -429,6 +433,21 @@ def invoices():
         cost = int(s['Courts']) * 2 * court_rate_in_force(date)
         print(f"{date.format('Do'):>7}\t{s['Courts']:>6}\t£{cost:>6.2f}"
               f"\t£{get_total_payments(s['People']):>6.2f}")
+        # TODO: show total for month
+
+
+def historic_session():
+    text_date = input(f"Process a historic session.  Enter date as DDMM "
+                      f"(plus YY if looking at a previous year):\n\t")
+    y = arrow.now().year
+    date_elements = (int(text_date[i:i + 2]) for i in range(0, len(text_date), 2))
+    if len(text_date) <= 4:
+        d, m = date_elements
+    else:
+        d, m, y = date_elements
+        y += 2000
+    set_session_date(time_machine(arrow.Arrow(y, m, d)))
+    monday_process()
 
 
 session_date = get_latest_perse_time()
@@ -448,6 +467,7 @@ if __name__ == "__main__":
         "M": monday_process,
         "F": create_next_session_sheet,
         "I": invoices,
+        "H": historic_session,
     }
     if op in options:
         options[op]()
