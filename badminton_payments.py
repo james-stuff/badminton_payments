@@ -119,7 +119,7 @@ def get_latest_nationwide_csv_filename() -> str:
     downloads_folder = pathlib.Path("C:\\Users\\j_a_c\\Downloads")
     file_listing = [*downloads_folder.glob("Statement Download*.csv")]
     if file_listing:
-        return str(max(file_listing, key=lambda file: file.stat().st_ctime))
+        return str(max(file_listing, key=lambda file: file.stat().st_mtime))
     return ""
 
 
@@ -198,9 +198,38 @@ def identify_payer(account_id: str, amount: float) -> str:
             old_alias = old_alias[0]
     """else previously un-encountered account id"""
     new_alias = get_new_alias_from_input(account_id, amount, clue=old_alias)
-    if new_alias:
+    if new_alias.upper() == "H":
+        allocate_to_past_session(amount)
+        return ""
+    elif new_alias:
         set_new_alias(account_id, new_alias)
     return new_alias
+
+
+def allocate_to_past_session(payment_amount: float,
+                             payment_method: str = "transfer"):
+    previous_unpaid = {}
+    counter = 1
+    for session in coll.find({"People": {"$exists": True}}):
+        historic_date = arrow.get(session["Date"])
+        if historic_date > arrow.now().shift(days=-130):
+            unpaid = [k for k, v in session["People"].items() if not v]
+            for person in unpaid:
+                previous_unpaid[counter] = person, historic_date
+                counter += 1
+    text_options = [f"{p} for {d.format('Do MMM YYYY')}"
+                    for p, d in previous_unpaid.values()]
+    pu_key = int(input(f"Allocate to whom and when?\n"
+                       f"{show_options_list(text_options)}\n"))
+    attendee, previous_session = previous_unpaid[pu_key]
+    current_session = session_date
+    set_session_date(previous_session)
+    record_payment(attendee, payment_amount, payment_type=payment_method,
+                   keep_previous_payment=True)
+    sorting_out_multi_person_payments(payment_amount)
+    # TODO: above line should use the per_person_cost for the historic session
+    #        . . . thus ensuring payments obo are handled at the right time
+    set_session_date(current_session)
 
 
 def handle_non_transfer_payments():
@@ -237,7 +266,11 @@ def sorting_out_multi_person_payments(per_person_cost: float):
                                    f"£{excess:.2f}. "
                                    f"What do you want to do with it?\n"
                                    f"{show_options_list(options)}\n")
-                    if int(choice) == 1:
+                    if choice.upper() == "H":
+                        allocate_to_past_session(excess)
+                        excess -= per_person_cost
+                        record_payment(attendee, per_person_cost, type_of_payment, False)
+                    elif int(choice) == 1:
                         recipient = pick_name_from_unpaid("Who are they paying for")
                         excess -= per_person_cost
                         amount_paid -= per_person_cost
@@ -284,7 +317,7 @@ def pick_name_from(list_of_names: [str], question: str) -> str:
         index_chosen = int(choice) - 1
         if index_chosen in range(len(list_of_names)):
             return list_of_names[index_chosen]
-    return ""
+    return choice
 
 
 def get_new_alias_from_input(account_name: str,
@@ -300,7 +333,6 @@ def get_new_alias_from_input(account_name: str,
         # TODO: should be able to choose to Ignore first time around
         #   (e.g. for someone who paid for something else and therefore
         #     is not on the attendee list)
-        # TODO: also would like to be able to allocate against past session
         question = f"Who is {account_name}{hint}?  (They paid £{amount:.2f})"
         identified_attendee = pick_name_from(group, question)
         if identified_attendee:
@@ -308,28 +340,31 @@ def get_new_alias_from_input(account_name: str,
     return ""
 
 
-def show_options_list(options: [str]) -> str:
-    option_list = [f"[{i + 1}] {name}" for i, name in enumerate(options)] + \
-                  ["[?] Don't know", "[I] Ignore"]
+def show_options_list(choices: [str]) -> str:
+    remaining_options = [f"[{i + 1}] {c}" for i, c in enumerate(choices)] + \
+                        [
+                            "[H] Allocate against previous session",
+                            "[?] Don't know",
+                            "[I] Ignore",
+                        ]
     # TODO: see Vania's train payment.  Want to be able to ignore it the first time
     #       around, not be forced to pick from the list and hit '?' again
-    # TODO: consider adding the ability to allocate payment to a previous session
     # ToDO: probably add one-off payments to a separate document so can view
     #       at end of month
     display_string = ""
     max_line_length = 72
-    while option_list:
+    while remaining_options:
         next_line = "\t"
-        for index, text in enumerate(option_list):
+        for index, text in enumerate(remaining_options):
             if len(next_line) + len(text) <= max_line_length:
                 next_line += f"\t{text}"
-                if index == len(option_list) - 1:
+                if index == len(remaining_options) - 1:
                     display_string += next_line
-                    option_list = []
+                    remaining_options = []
             else:
                 next_line += "\n"
                 display_string += next_line
-                option_list = option_list[index:]
+                remaining_options = remaining_options[index:]
                 break
     return display_string
 
@@ -423,7 +458,7 @@ def invoices():
     first_of_month = arrow.Arrow(year, month, 1)
     sessions = coll.find(
         {"Date": {"$gt": first_of_month.datetime,
-        # {"Date": {"$gt": arrow.Arrow(year, month, 14).datetime,
+                  # {"Date": {"$gt": arrow.Arrow(year, month, 14).datetime,
                   "$lt": first_of_month.ceil("month").datetime}})
     print(f"\nExpected Perse School Invoice for "
           f"{first_of_month.format('MMMM YYYY').upper()}:")
@@ -453,7 +488,6 @@ def historic_session():
 session_date = get_latest_perse_time()
 coll = MongoClient().money.badminton
 
-
 if __name__ == "__main__":
     my_parser = argparse.ArgumentParser(description='Badminton payments processing')
     my_parser.add_argument('Operation',
@@ -473,4 +507,3 @@ if __name__ == "__main__":
         options[op]()
     else:
         print(f"{op} is not a valid operation code")
-
