@@ -24,7 +24,7 @@ def list_of_names_from_whatsapp(pasted_list: str) -> [str]:
 def clean_name_list(names: [str]) -> [str]:
     def extract_name(row: str) -> str:
         if row:
-            return row.strip(" .1234567890").title()
+            return row.strip(" @.1234567890").title()
         return ""
 
     names = [*filter(lambda x: x, [extract_name(n) for n in names])]
@@ -317,7 +317,9 @@ def pick_name_from(list_of_names: [str], question: str) -> str:
         index_chosen = int(choice) - 1
         if index_chosen in range(len(list_of_names)):
             return list_of_names[index_chosen]
-    return choice
+    if choice.upper() == "H":
+        return choice
+    return ""
 
 
 def get_new_alias_from_input(account_name: str,
