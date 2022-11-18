@@ -16,11 +16,6 @@ def session_data_from_google_sheet() -> dict:
     return gsi.get_session_data(session_date)
 
 
-def list_of_names_from_whatsapp(pasted_list: str) -> [str]:
-    """used only in testing"""
-    return clean_name_list(pasted_list.split("\n"))
-
-
 def clean_name_list(names: [str]) -> [str]:
     def extract_name(row: str) -> str:
         if row:
@@ -49,18 +44,20 @@ def ensure_uniqueness(names: [str]) -> [str]:
     return unique_names
 
 
+def get_current_session() -> dict:
+    return coll.find_one({"Date": {"$eq": session_date.datetime}})
+
+
 def create_session():
     google_data = session_data_from_google_sheet()
     mongo_date = session_date.datetime
-    datetime_query = {"Date": {"$eq": mongo_date}}
-    if coll.find_one(datetime_query):
-        if input(f"Session already exists for {session_date.format('ddd Do MMMM')}, "
-                 f"overwrite? ") in "nN":
+    if get_current_session():
+        if input(f"Session already exists for "
+                 f"{session_date.format('ddd Do MMMM')}, overwrite? ") in "nN":
             # TODO: this alone does not stop the session being processed
             #       and will result in double-counted payments
             return
-        coll.delete_many(datetime_query)
-        # TODO: maybe allow editing here?  Or select a previous session
+        coll.delete_many({"Date": {"$eq": mongo_date}})
     document = {k: v for k, v in google_data.items() if k != "Col A"}
     document["Date"] = mongo_date
     document["People"] = {name: {} for name in clean_name_list(google_data["Col A"])}
@@ -125,8 +122,7 @@ def get_latest_nationwide_csv_filename() -> str:
 
 def monday_process() -> None:
     create_session()
-    mongo_date = session_date.datetime
-    session = coll.find_one({"Date": {"$eq": mongo_date}})
+    session = get_current_session()
     attendees = session["People"]
 
     # per_person_cost = float(input("Please enter the amount charged per person: £"))
@@ -150,7 +146,7 @@ def monday_process() -> None:
     handle_non_transfer_payments()
     sorting_out_multi_person_payments(per_person_cost)
 
-    after = coll.find_one({"Date": {"$eq": mongo_date}})["People"]
+    after = get_current_session()["People"]
     payments_string = "\n".join([f"\t£{get_total_payments(after, t):.2f} in {t}"
                                  for t in ("transfer", "host", "cash")])
     print(f"So far have received \n{payments_string}\nfor this session.")
@@ -226,9 +222,8 @@ def allocate_to_past_session(payment_amount: float,
     set_session_date(previous_session)
     record_payment(attendee, payment_amount, payment_type=payment_method,
                    keep_previous_payment=True)
-    sorting_out_multi_person_payments(payment_amount)
-    # TODO: above line should use the per_person_cost for the historic session
-    #        . . . thus ensuring payments obo are handled at the right time
+    historic_session_cost = get_current_session()['Amount Charged']
+    sorting_out_multi_person_payments(historic_session_cost)
     set_session_date(current_session)
 
 
@@ -251,7 +246,7 @@ def handle_non_transfer_payments():
 
 def sorting_out_multi_person_payments(per_person_cost: float):
     for attendee in get_all_attendees():
-        session_record = coll.find_one({"Date": {"$eq": session_date.datetime}})
+        session_record = get_current_session()
         for type_of_payment in ("transfer", "cash", "host"):
             if type_of_payment in session_record["People"][attendee]:
                 amount_paid = session_record["People"][attendee][type_of_payment]
@@ -375,8 +370,7 @@ def record_payment(attendee: str, amount: float,
                    payment_type: str = "transfer",
                    keep_previous_payment: bool = True):
     previous_amount = 0
-    session_record = coll.find_one({"Date": {"$eq": session_date.datetime},
-                                    "People": {"$exists": True}})
+    session_record = get_current_session()
     people = session_record["People"]
     if keep_previous_payment and session_record and \
             payment_type in session_record["People"][attendee]:
@@ -388,12 +382,12 @@ def record_payment(attendee: str, amount: float,
 
 
 def get_unpaid() -> [str]:
-    session_people = coll.find_one({"Date": {"$eq": session_date.datetime}})["People"]
+    session_people = get_current_session()["People"]
     return [k for k in session_people if not session_people[k]]
 
 
 def get_all_attendees() -> [str]:
-    session_people = coll.find_one({"Date": {"$eq": session_date.datetime}})["People"]
+    session_people = get_current_session()["People"]
     return [*session_people.keys()]
 
 
