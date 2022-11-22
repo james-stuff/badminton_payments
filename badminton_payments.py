@@ -5,6 +5,7 @@ import pandas as pd
 from io import StringIO
 import pathlib
 import google_sheets_interface as gsi
+import re
 
 
 def set_session_date(new_date: arrow.Arrow):
@@ -48,20 +49,20 @@ def get_current_session() -> dict:
     return coll.find_one({"Date": {"$eq": session_date.datetime}})
 
 
-def create_session():
+def create_session() -> dict:
     google_data = session_data_from_google_sheet()
     mongo_date = session_date.datetime
     if get_current_session():
         if input(f"Session already exists for "
                  f"{session_date.format('ddd Do MMMM')}, overwrite? ") in "nN":
-            # TODO: this alone does not stop the session being processed
-            #       and will result in double-counted payments
-            return
+            return {}
         coll.delete_many({"Date": {"$eq": mongo_date}})
-    document = {k: v for k, v in google_data.items() if k != "Col A"}
-    document["Date"] = mongo_date
-    document["People"] = {name: {} for name in clean_name_list(google_data["Col A"])}
-    coll.insert_one(document)
+    new_document = {k: v for k, v in google_data.items() if k != "Col A"}
+    new_document["Date"] = mongo_date
+    new_document["People"] = {name: {} for name in
+                              clean_name_list(google_data["Col A"])}
+    coll.insert_one(new_document)
+    return new_document
 
 
 def get_latest_perse_time(request_time: arrow.Arrow = arrow.now(tz="local")) -> arrow.Arrow:
@@ -121,8 +122,9 @@ def get_latest_nationwide_csv_filename() -> str:
 
 
 def monday_process() -> None:
-    create_session()
-    session = get_current_session()
+    session = create_session()
+    if not session:
+        return
     attendees = session["People"]
 
     # per_person_cost = float(input("Please enter the amount charged per person: £"))
@@ -156,6 +158,9 @@ def monday_process() -> None:
 
 
 def pay_obo(donor: str, transfer_value: float, cost: float) -> float:
+    """Automatically allocates cost amount to registered recipients of
+    OBO payments from the donor, if they are attendees and while there is
+    enough of an excess amount left to cover session cost"""
     # TODO: write paying account id?
     doc_obo = coll.find_one({"_id": "PaymentsOBO"})
     if donor not in doc_obo:
@@ -402,15 +407,23 @@ def generate_sign_up_message(wa_pasting: str, host: str = "James") -> str:
              f"{friday.format('dddd, Do MMMM YYYY')}, 19:30 - 21:30:" \
              f"\n\nUp to 6 courts, max. 33 players\n\n"
 
-    def extract_name(raw_data: str) -> str:
-        subsequent_name, _, name = raw_data.partition(': ')
-        if subsequent_name and "[" not in subsequent_name:
-            return subsequent_name
-        return name
+    names = [f"{host} (Host)"]
+    time_regex = "\[[0-2][0-9]:[0-5][0-9], [0-3][0-9]/[0-1][0-9]/20[0-9][0-9]] "
+    ends = [i.end() for i in re.finditer(time_regex, wa_pasting)]
+    for ind, e in enumerate(ends):
+        message = wa_pasting[e:e + 10000 if ind == len(ends) - 1 else ends[ind + 1] - 21]
+        lines = []
+        for line in message.split('\n'):
+            sender, _, body = line.partition(": ")
+            lines.append(body if body else sender)
+        if len(lines[0]) < 21:
+            names += [ln for ln in lines if ln]
 
-    names = [f"{host} (Host)"] + [extract_name(m) for m in wa_pasting.split('\n')]
-    names = [*filter(lambda text: text and len(text.split(" ")) < 3, names)]
-    in_list = "\n".join([f"{i + 1}. {nm}" for i, nm in enumerate(names[:33])])
+    while len(names) < 35:
+        names.append("")
+    people_with_a_spot = [f"{i + 1}. {nm}"
+                          for i, nm in enumerate(names[:33]) if nm]
+    in_list = "\n".join(people_with_a_spot)
     waitlist = "\n".join([f"{chr(97 + j)}. {wnm}" for j, wnm in enumerate(names[33:])])
     return f"{header}{in_list}\n\nWAITLIST:\n{waitlist}\n...\n" \
            f"(copy and paste, adding your name to secure a spot)"
