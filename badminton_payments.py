@@ -146,7 +146,7 @@ def monday_process() -> None:
                                          per_person_cost)
             record_payment(paying_attendee, payment_amount)
     handle_non_transfer_payments()
-    sorting_out_multi_person_payments(per_person_cost)
+    sorting_out_excess_payments(per_person_cost)
 
     after = get_current_session()["People"]
     payments_string = "\n".join([f"\t£{get_total_payments(after, t):.2f} in {t}"
@@ -202,6 +202,9 @@ def identify_payer(account_id: str, amount: float) -> str:
     if new_alias.upper() == "H":
         allocate_to_past_session(amount)
         return ""
+    elif new_alias.upper() == "I":
+        record_incidental_payment("unknown", amount)
+        return ""
     elif new_alias:
         set_new_alias(account_id, new_alias)
     return new_alias
@@ -228,7 +231,7 @@ def allocate_to_past_session(payment_amount: float,
     record_payment(attendee, payment_amount, payment_type=payment_method,
                    keep_previous_payment=True)
     historic_session_cost = get_current_session()['Amount Charged']
-    sorting_out_multi_person_payments(historic_session_cost)
+    sorting_out_excess_payments(historic_session_cost)
     set_session_date(current_session)
 
 
@@ -249,7 +252,7 @@ def handle_non_transfer_payments():
                 record_payment(attendee, amount, case)
 
 
-def sorting_out_multi_person_payments(per_person_cost: float):
+def sorting_out_excess_payments(per_person_cost: float):
     for attendee in get_all_attendees():
         session_record = get_current_session()
         for type_of_payment in ("transfer", "cash", "host"):
@@ -260,7 +263,7 @@ def sorting_out_multi_person_payments(per_person_cost: float):
                     options = (
                         f"Pay for someone else",
                         f"Keep all £{amount_paid:.2f} against {attendee}",
-                        "Ignore this excess - it is for something else",
+                        "Allocate this excess as something else",
                     )
                     choice = input(f"{attendee} has paid an additional "
                                    f"£{excess:.2f}. "
@@ -280,8 +283,23 @@ def sorting_out_multi_person_payments(per_person_cost: float):
                     elif int(choice) == 2:
                         excess = 0
                     elif int(choice) == 3:
+                        record_incidental_payment(attendee, excess)
                         excess = 0
                         record_payment(attendee, per_person_cost, type_of_payment, False)
+
+
+def record_incidental_payment(attendee: str, amount: float):
+    purpose = input("What was this payment for?\n")
+    query = {"_id": "IncidentalPayments"}
+    record = coll.find_one(query)
+    date_string = session_date.format("YYYYMMDD")
+    if not record:
+        record = query
+        coll.insert_one(query)
+    if date_string not in record:
+        record[date_string] = {}
+    record[date_string][attendee] = {"amount": amount, "purpose": purpose}
+    coll.update_one(query, {"$set": record})
 
 
 def add_to_payments_obo(donor: str, recipient: str):
@@ -318,6 +336,9 @@ def pick_name_from(list_of_names: [str], question: str) -> str:
         if index_chosen in range(len(list_of_names)):
             return list_of_names[index_chosen]
     if choice.upper() == "H":
+        return choice
+    if choice.upper() == "I":
+        # TODO: how to pass the name of the payer?
         return choice
     return ""
 
@@ -467,17 +488,26 @@ def invoices():
     first_of_month = arrow.Arrow(year, month, 1)
     sessions = coll.find(
         {"Date": {"$gt": first_of_month.datetime,
-                  # {"Date": {"$gt": arrow.Arrow(year, month, 14).datetime,
-                  "$lt": first_of_month.ceil("month").datetime}})
+                  "$lt": first_of_month.ceil("month").datetime}}).sort("Date")
     print(f"\nExpected Perse School Invoice for "
           f"{first_of_month.format('MMMM YYYY').upper()}:")
     print(f"\nDate\tCourts\tCost\tTransfers")
+    total_cost, total_transfers = 0, 0
     for s in sessions:
         date = arrow.get(s['Date'])
         cost = int(s['Courts']) * 2 * court_rate_in_force(date)
+        transfers = get_total_payments(s['People'])
         print(f"{date.format('Do'):>7}\t{s['Courts']:>6}\t£{cost:>6.2f}"
-              f"\t£{get_total_payments(s['People']):>6.2f}")
-        # TODO: show total for month
+              f"\t£{transfers:>6.2f}")
+        total_cost += cost
+        total_transfers += transfers
+    print("")
+    print(f"Totals:\t\t£{total_cost:>6.2f}\t£{total_transfers:>6.2f}")
+    incidentals = coll.find_one({"_id": "IncidentalPayments"})
+    recs = [v for k, v in incidentals.items() if k[:6] == f"{date.format('YYYYMM')}"]
+    inc_total = sum([v for r in recs for person in r.values() for k, v in person.items() if k == 'amount'])
+    print(f"Incidental transfers:\t£{inc_total:>6.2f}")
+    print(f"Total to move:\t\t£{total_transfers + inc_total:>6.2f}")
 
 
 def historic_session():
