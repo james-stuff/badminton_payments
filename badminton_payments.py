@@ -212,21 +212,25 @@ def identify_payer(account_id: str, amount: float) -> str:
 
 def allocate_to_past_session(payment_amount: float,
                              payment_method: str = "transfer"):
+    # TODO: "allocate against previous session" displayed even if
+    #       you are selecting from unpaid for who just paid in cash
+    current_session = session_date
     previous_unpaid = {}
     counter = 1
-    for session in coll.find({"People": {"$exists": True}}):
+    date_range = {"$gt": arrow.now().shift(days=-90).datetime,
+                  "$lte": session_date.datetime}
+    for session in coll.find({"People": {"$exists": True},
+                              "Date": date_range}):
         historic_date = arrow.get(session["Date"])
-        if historic_date > arrow.now().shift(days=-130):
-            unpaid = [k for k, v in session["People"].items() if not v]
-            for person in unpaid:
-                previous_unpaid[counter] = person, historic_date
-                counter += 1
+        set_session_date(historic_date)
+        for person in get_unpaid():
+            previous_unpaid[counter] = person, historic_date
+            counter += 1
     text_options = [f"{p} for {d.format('Do MMM YYYY')}"
                     for p, d in previous_unpaid.values()]
     pu_key = int(input(f"Allocate to whom and when?\n"
                        f"{show_options_list(text_options)}\n"))
     attendee, previous_session = previous_unpaid[pu_key]
-    current_session = session_date
     set_session_date(previous_session)
     record_payment(attendee, payment_amount, payment_type=payment_method,
                    keep_previous_payment=True)
@@ -270,7 +274,7 @@ def sorting_out_excess_payments(per_person_cost: float):
                                    f"What do you want to do with it?\n"
                                    f"{show_options_list(options)}\n")
                     if choice.upper() == "H":
-                        allocate_to_past_session(excess)
+                        allocate_to_past_session(excess, type_of_payment)
                         excess -= per_person_cost
                         record_payment(attendee, per_person_cost, type_of_payment, False)
                     elif int(choice) == 1:
@@ -305,7 +309,7 @@ def record_incidental_payment(attendee: str, amount: float):
 def add_to_payments_obo(donor: str, recipient: str):
     query = {"_id": "PaymentsOBO"}
     record = coll.find_one(query)
-    if donor in record:
+    if (donor in record) and (recipient not in record[donor]):
         record[donor] = record[donor] + [recipient]
     else:
         record[donor] = [recipient]
@@ -372,8 +376,6 @@ def show_options_list(choices: [str]) -> str:
                         ]
     # TODO: see Vania's train payment.  Want to be able to ignore it the first time
     #       around, not be forced to pick from the list and hit '?' again
-    # ToDO: probably add one-off payments to a separate document so can view
-    #       at end of month
     display_string = ""
     max_line_length = 72
     while remaining_options:
@@ -409,7 +411,7 @@ def record_payment(attendee: str, amount: float,
 
 def get_unpaid() -> [str]:
     session_people = get_current_session()["People"]
-    return [k for k in session_people if not session_people[k]]
+    return [*filter(lambda k: not session_people[k], session_people.keys())]
 
 
 def get_all_attendees() -> [str]:
@@ -455,8 +457,7 @@ def create_next_session_sheet():
     next_friday = time_machine(get_latest_perse_time().shift(days=7))
     print(f"This'll create a sheet for {next_friday.format('Do MMM')}")
     gsi.create_new_session_sheet(next_friday)
-    # TODO: should set courts to 6 and cash payments to zero
-    #  and can I make the new sheet the one you land on when opening spreadsheet?
+    # TODO: can I make the new sheet the one you land on when opening spreadsheet?
     # TODO: how long do the credentials stay valid for?
     #       Maybe delete the token file if it is of more than a certain age?
     #   From google: "How long do Google API tokens last?
@@ -471,7 +472,7 @@ def create_next_session_sheet():
 
 
 def court_rate_in_force(date: arrow.Arrow) -> float:
-    rates = coll.find_one({"_id": "Perse Rates"})
+    rates = coll.find_one({"_id": "PerseRates"})
     del rates["_id"]
     latest_date = max([k for k in rates.keys() if arrow.get(k) <= date])
     return rates[latest_date]
