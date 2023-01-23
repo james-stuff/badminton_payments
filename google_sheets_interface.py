@@ -2,6 +2,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 import os
+import time
 
 
 scopes = [
@@ -11,6 +12,8 @@ scopes = [
 cred_path = "..\\_google_credentials\\"
 token_file = f"{cred_path}token.json"
 cred_file = [fn for fn in os.listdir(cred_path) if fn.startswith("client_secret_")][0]
+if time.time() > os.path.getctime(token_file) + (60 * 60 * 24 * 7):
+    os.remove(token_file)
 if os.path.exists(token_file):
     creds = Credentials.from_authorized_user_file(token_file, scopes)
 else:
@@ -96,11 +99,30 @@ def create_new_session_sheet(session_date):
         body={"ranges": [f"{day}!A1:A39", f"{day}!D2:J35"]}
     ).execute()
 
-    sheets_service.spreadsheets().values().update(
+    # set certain cells/ranges to desired initial values
+    batch_update_body = {
+        "data": [
+            {
+                # number of courts
+                "range": f"{day}!D1:D1", "values": [[6]]
+            },
+            {
+                # payment checkboxes
+                "range": f"{day}!B2:C34", "values": [[False] * 2] * 33
+            },
+            {
+                # cash received
+                "range": f"{day}!B38:B38", "values": [[0.00]]
+            },
+        ],
+        "valueInputOption": "USER_ENTERED",
+    }
+    sheets_service.spreadsheets().values().batchUpdate(
         spreadsheetId=destination_ss,
-        range=f"{day}!B2:C34",
-        valueInputOption="USER_ENTERED",
-        body={
-            "values": [[False] * 2] * 33
-        }
+        body=batch_update_body
     ).execute()
+
+    # TODO: put new sheet in its correct place in the order and make it default
+    #       (if necessary, could do what I used to do manually,
+    #       i.e. take a copy of the first sheet, overwrite the original and rename
+    # TODO: maybe also fill in the Transfer check-boxes in Monday process?

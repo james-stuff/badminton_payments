@@ -458,13 +458,14 @@ def create_next_session_sheet():
     print(f"This'll create a sheet for {next_friday.format('Do MMM')}")
     gsi.create_new_session_sheet(next_friday)
     # TODO: can I make the new sheet the one you land on when opening spreadsheet?
-    # TODO: how long do the credentials stay valid for?
-    #       Maybe delete the token file if it is of more than a certain age?
     #   From google: "How long do Google API tokens last?
     # A Google Cloud Platform project with an OAuth consent screen configured
     #  for an external user type and a publishing status of "Testing" is
     #  issued a refresh token expiring in 7 days. There is currently a
-    #  limit of 100 refresh tokens per Google Account per OAuth 2.0 client ID."
+    #  limit of 100 refresh tokens per Google Account per OAuth 2.0 client ID.
+    #  23/01/2023 - the 100 token limit seems is just per client ID.  Solution
+    #  is probably to simply create a new client ID if and when that happens
+    #  (some time around September 2024 if it's still going by then)"
     # TODO: process of creating a new tab didn't work when new monthly sheet
     #       needed to be created (for 4th Nov session)
     # TODO: running 'Friday' process on a Monday generates a tab for the
