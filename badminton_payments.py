@@ -127,16 +127,15 @@ def monday_process() -> None:
         return
     attendees = session["People"]
 
-    # per_person_cost = float(input("Please enter the amount charged per person: £"))
     per_person_cost = session["Amount Charged"]
     me = "James (Host)"
     if me in attendees:
         record_payment(me, per_person_cost, "host")
 
     bank_df = create_nationwide_dataset()
-    for df_index in bank_df.index:
-        account_id = bank_df.loc[df_index]["Account ID"]
-        payment_amount = bank_df.loc[df_index]["Value"]
+    for index_num in bank_df.index:
+        account_id = bank_df.loc[index_num]["Account ID"]
+        payment_amount = bank_df.loc[index_num]["Value"]
         paying_attendee = find_attendee_in_mappings(account_id)
         if not paying_attendee:
             paying_attendee = identify_payer(account_id, payment_amount)
@@ -189,16 +188,16 @@ def find_attendee_in_mappings(account_id: str) -> str:
 
 
 def identify_payer(account_id: str, amount: float) -> str:
-    """for when account name did not match with any attendee name"""
+    """for when account name did not match with any attendee name in mappings"""
     mappings = coll.find_one({"_id": "AccountMappings"})
-    old_alias = ""
+    previous_alias = ""
     if account_id in mappings:
         """e.g. Steve L, Ali I: previous alias is not in current session"""
-        old_alias = mappings[account_id]
-        if isinstance(old_alias, list):
-            old_alias = old_alias[0]
+        previous_alias = mappings[account_id]
+        if isinstance(previous_alias, list):
+            previous_alias = previous_alias[0]
     """else previously un-encountered account id"""
-    new_alias = get_new_alias_from_input(account_id, amount, clue=old_alias)
+    new_alias = get_new_alias_from_input(account_id, amount, clue=previous_alias)
     if new_alias.upper() == "H":
         allocate_to_past_session(amount)
         return ""
@@ -267,29 +266,31 @@ def sorting_out_excess_payments(per_person_cost: float):
                     options = (
                         f"Pay for someone else",
                         f"Keep all £{amount_paid:.2f} against {attendee}",
-                        "Allocate this excess as something else",
+                        "Allocate this excess as incidental payment",
+                        "Allocate against a previous session"
                     )
                     choice = input(f"{attendee} has paid an additional "
                                    f"£{excess:.2f}. "
                                    f"What do you want to do with it?\n"
                                    f"{show_options_list(options)}\n")
-                    if choice.upper() == "H":
-                        allocate_to_past_session(excess, type_of_payment)
-                        excess -= per_person_cost
-                        record_payment(attendee, per_person_cost, type_of_payment, False)
-                    elif int(choice) == 1:
-                        recipient = pick_name_from_unpaid("Who are they paying for")
-                        excess -= per_person_cost
-                        amount_paid -= per_person_cost
-                        record_payment(attendee, amount_paid, type_of_payment, False)
-                        record_payment(recipient, per_person_cost, type_of_payment)
-                        add_to_payments_obo(attendee, recipient)
-                    elif int(choice) == 2:
-                        excess = 0
-                    elif int(choice) == 3:
-                        record_incidental_payment(attendee, excess)
-                        excess = 0
-                        record_payment(attendee, per_person_cost, type_of_payment, False)
+                    if choice.isnumeric():
+                        if int(choice) == 1:
+                            recipient = pick_name_from_unpaid("Who are they paying for")
+                            excess -= per_person_cost
+                            amount_paid -= per_person_cost
+                            record_payment(attendee, amount_paid, type_of_payment, False)
+                            record_payment(recipient, per_person_cost, type_of_payment)
+                            add_to_payments_obo(attendee, recipient)
+                        elif int(choice) == 2:
+                            excess = 0
+                        elif int(choice) == 3:
+                            record_incidental_payment(attendee, excess)
+                            excess = 0
+                            record_payment(attendee, per_person_cost, type_of_payment, False)
+                        elif int(choice) == 4:
+                            allocate_to_past_session(excess, type_of_payment)
+                            excess -= per_person_cost
+                            record_payment(attendee, per_person_cost, type_of_payment, False)
 
 
 def record_incidental_payment(attendee: str, amount: float):
@@ -333,8 +334,13 @@ def pick_name_from_unpaid(question: str) -> str:
     return pick_name_from(get_unpaid(), question)
 
 
-def pick_name_from(list_of_names: [str], question: str) -> str:
-    choice = input(f"{question}?\n{show_options_list(list_of_names)}\n")
+def pick_name_from(list_of_names: [str], question: str,
+                   names_plus_options: bool = False) -> str:
+    other_options = {
+        "H": "Allocate against a previous session",
+        "I": "Record as incidental payment",
+    } if names_plus_options else {}
+    choice = input(f"{question}?\n{show_options_list(list_of_names, other_options)}\n")
     if choice.isnumeric():
         index_chosen = int(choice) - 1
         if index_chosen in range(len(list_of_names)):
@@ -357,25 +363,16 @@ def get_new_alias_from_input(account_name: str,
                        key=lambda s: initials.index(s[0]))
     hint = f" (previously known as {clue})" if clue else ""
     for group in (shortlist, not_paid):
-        # TODO: should be able to choose to Ignore first time around
-        #   (e.g. for someone who paid for something else and therefore
-        #     is not on the attendee list)
         question = f"Who is {account_name}{hint}?  (They paid £{amount:.2f})"
-        identified_attendee = pick_name_from(group, question)
+        identified_attendee = pick_name_from(group, question, names_plus_options=True)
         if identified_attendee:
             return identified_attendee
     return ""
 
 
-def show_options_list(choices: [str]) -> str:
-    remaining_options = [f"[{i + 1}] {c}" for i, c in enumerate(choices)] + \
-                        [
-                            "[H] Allocate against previous session",
-                            "[?] Don't know",
-                            "[I] Ignore",
-                        ]
-    # TODO: see Vania's train payment.  Want to be able to ignore it the first time
-    #       around, not be forced to pick from the list and hit '?' again
+def show_options_list(numbered_choices: [str], breakout_options: dict = {}) -> str:
+    remaining_options = [f"[{i + 1}] {c}" for i, c in enumerate(numbered_choices)] + \
+                        [f"[{k}] {v}" for k, v in breakout_options.items()]
     display_string = ""
     max_line_length = 72
     while remaining_options:
@@ -466,8 +463,6 @@ def create_next_session_sheet():
     #  23/01/2023 - the 100 token limit seems is just per client ID.  Solution
     #  is probably to simply create a new client ID if and when that happens
     #  (some time around September 2024 if it's still going by then)"
-    # TODO: process of creating a new tab didn't work when new monthly sheet
-    #       needed to be created (for 4th Nov session)
     # TODO: running 'Friday' process on a Monday generates a tab for the
     #       upcoming Friday, not the previous one
 
