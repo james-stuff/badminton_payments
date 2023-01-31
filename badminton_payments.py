@@ -339,6 +339,7 @@ def pick_name_from(list_of_names: [str], question: str,
     other_options = {
         "H": "Allocate against a previous session",
         "I": "Record as incidental payment",
+        "?": "Don't know",
     } if names_plus_options else {}
     choice = input(f"{question}?\n{show_options_list(list_of_names, other_options)}\n")
     if choice.isnumeric():
@@ -423,7 +424,7 @@ def get_total_payments(session_people: dict, payment_type: str = "transfer") -> 
 
 def generate_sign_up_message(wa_pasting: str, host: str = "James") -> str:
     friday = time_machine(arrow.now().shift(days=7))
-    header = f"Booked (by James), Perse Upper School, " \
+    header = f"Perse Upper School, " \
              f"{friday.format('dddd, Do MMMM YYYY')}, 19:30 - 21:30:" \
              f"\n\nUp to 6 courts, max. 33 players\n\n"
 
