@@ -1,3 +1,5 @@
+import googleapiclient.errors
+import httplib2
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -12,7 +14,7 @@ scopes = [
 cred_path = "..\\_google_credentials\\"
 token_file = f"{cred_path}token.json"
 cred_file = [fn for fn in os.listdir(cred_path) if fn.startswith("client_secret_")][0]
-if time.time() > os.path.getctime(token_file) + (60 * 60 * 24 * 7):
+if time.time() > os.path.getmtime(token_file) + (60 * 60 * 24 * 7):
     os.remove(token_file)
 if os.path.exists(token_file):
     creds = Credentials.from_authorized_user_file(token_file, scopes)
@@ -25,17 +27,24 @@ sheets_service = build('sheets', 'v4', credentials=creds)
 
 
 def get_session_data(session_date) -> dict:
-    """retrieves column A of the sheet, converted into a list of strings"""
     tab = session_date.day
-    sheet_data = sheets_service.spreadsheets().values().get(
-        spreadsheetId=get_spreadsheet_id(session_date),
-        range=f"{tab}!A1:K41").execute()
+    try:
+        sheet_data = sheets_service.spreadsheets().values().get(
+            spreadsheetId=get_spreadsheet_id(session_date),
+            range=f"{tab}!A1:K41").execute()
+    except googleapiclient.errors.HttpError:
+        print(f"Hmmm . . . there doesn't seem to be a Sheet for "
+              f"{session_date.format('Do MMMM YYYY')}")
+        return {}
     all_values = sheet_data["values"]
+    feb_2023_format = all_values[0][1] != "Cash"
+    courts_col, attendance_row, amount_row, start_taking_names = (0, 1, 2, 8) \
+        if feb_2023_format else (3, 35, 36, 0)
     app_data = {
-        "Col A": [v[0] if v else "" for v in all_values],
-        "Courts": int(all_values[0][3]),
-        "In Attendance": all_values[35][0],
-        "Amount Charged": float(all_values[36][3][1:]),
+        "Col A": [v[0] if v else "" for v in all_values[start_taking_names:]],
+        "Courts": int(all_values[0][courts_col]),
+        "In Attendance": int(all_values[attendance_row][0]),
+        "Amount Charged": float(all_values[amount_row][3][1:]),
     }
     return app_data
 
@@ -57,7 +66,7 @@ def get_spreadsheet_id(session_date) -> str:
 def create_new_session_sheet(session_date):
     """Creates blank sheet for the next session, also creating a new
     monthly spreadsheet to put it in, if one doesn't already exist"""
-    template_sheet = "1c3iSSQNEa8A7azAhmiQEMcBZAKZLFIzu0D6HyfFzV2U"
+    template_sheet = "1jiwsW57D8E70ywXz-zHKhqcArHpAME2771vyZTou-X0"
     destination_ss = get_spreadsheet_id(session_date)
     if not destination_ss:
         new_spreadsheet = sheets_service.spreadsheets().create(
@@ -66,10 +75,10 @@ def create_new_session_sheet(session_date):
         ).execute()
         destination_ss = new_spreadsheet.get('spreadsheetId')
 
-    # copy the template (sheet from 14th Oct 2022) into destination sheet
+    # copy the template (sheet from 27th Jan 2023) into destination sheet
     new_sheet_id = sheets_service.spreadsheets().sheets().copyTo(
         spreadsheetId=template_sheet,
-        sheetId=1402664106,
+        sheetId=178056562,
         body={"destinationSpreadsheetId": destination_ss}
     ).execute()["sheetId"]
 
@@ -96,7 +105,7 @@ def create_new_session_sheet(session_date):
     # clear stuff
     sheets_service.spreadsheets().values().batchClear(
         spreadsheetId=destination_ss,
-        body={"ranges": [f"{day}!A1:A39", f"{day}!D2:J35"]}
+        body={"ranges": [f"{day}!A2:A2", f"{day}!A9:A49", f"{day}!D9:J49"]}
     ).execute()
 
     # set certain cells/ranges to desired initial values
@@ -104,15 +113,15 @@ def create_new_session_sheet(session_date):
         "data": [
             {
                 # number of courts
-                "range": f"{day}!D1:D1", "values": [[6]]
+                "range": f"{day}!A1:A1", "values": [[6]]
             },
             {
                 # payment checkboxes
-                "range": f"{day}!B2:C34", "values": [[False] * 2] * 33
+                "range": f"{day}!B9:C41", "values": [[False] * 2] * 33
             },
             {
                 # cash received
-                "range": f"{day}!B38:B38", "values": [[0.00]]
+                "range": f"{day}!B5:B5", "values": [[0.00]]
             },
         ],
         "valueInputOption": "USER_ENTERED",

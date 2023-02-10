@@ -493,12 +493,16 @@ def invoices():
     total_cost, total_transfers = 0, 0
     for s in sessions:
         date = arrow.get(s['Date'])
-        cost = int(s['Courts']) * 2 * court_rate_in_force(date)
-        transfers = get_total_payments(s['People'])
-        print(f"{date.format('Do'):>7}\t{s['Courts']:>6}\t£{cost:>6.2f}"
-              f"\t£{transfers:>6.2f}")
-        total_cost += cost
-        total_transfers += transfers
+        if gsi.get_session_data(date):
+            # if a "Do"-format tab does not exist in a google sheet for this date,
+            # this returns no data, having caught a HttpError.  Intended use case is
+            # naming a sheet differently to indicate it is not for a Perse session
+            cost = int(s['Courts']) * 2 * court_rate_in_force(date)
+            transfers = get_total_payments(s['People'])
+            print(f"{date.format('Do'):>7}\t{s['Courts']:>6}\t£{cost:>6.2f}"
+                  f"\t£{transfers:>6.2f}")
+            total_cost += cost
+            total_transfers += transfers
     print("")
     print(f"Totals:\t\t£{total_cost:>6.2f}\t£{total_transfers:>6.2f}")
     incidentals = coll.find_one({"_id": "IncidentalPayments"})
