@@ -429,6 +429,7 @@ def generate_sign_up_message(wa_pasting: str, host: str = "James") -> str:
              f"\n\nUp to 6 courts, max. 33 players\n\n"
 
     names = [f"{host} (Host)"]
+
     time_regex = "\[[0-2][0-9]:[0-5][0-9], [0-3][0-9]/[0-1][0-9]/20[0-9][0-9]] "
     ends = [i.end() for i in re.finditer(time_regex, wa_pasting)]
     for ind, e in enumerate(ends):
@@ -493,14 +494,14 @@ def invoices():
     total_cost, total_transfers = 0, 0
     for s in sessions:
         date = arrow.get(s['Date'])
-        if gsi.get_session_data(date):
-            # if a "Do"-format tab does not exist in a google sheet for this date,
-            # this returns no data, having caught a HttpError.  Intended use case is
-            # naming a sheet differently to indicate it is not for a Perse session
+        print(f"{date.format('Do'):>7}\t", end="")
+        if "Venue" in s.keys():     # This key is added to DB manually, for now
+            venue = s['Venue']
+            print(f"({venue} session)")
+        else:
             cost = int(s['Courts']) * 2 * court_rate_in_force(date)
             transfers = get_total_payments(s['People'])
-            print(f"{date.format('Do'):>7}\t{s['Courts']:>6}\t£{cost:>6.2f}"
-                  f"\t£{transfers:>6.2f}")
+            print(f"{s['Courts']:>6}\t£{cost:>6.2f}\t£{transfers:>6.2f}")
             total_cost += cost
             total_transfers += transfers
     print("")
