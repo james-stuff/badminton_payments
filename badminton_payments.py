@@ -527,6 +527,16 @@ def historic_session():
     monday_process()
 
 
+def show_paid_invoices():
+    current_ac = MongoClient().money.current_account
+    start_day = arrow.now().shift(days=-180).floor("month")
+    print("\nRecently paid Perse School invoices:")
+    for rec in current_ac.find({"Date": {"$gte": start_day.datetime},
+                                "Party": {"$regex": " SP[0-9]{3} "}}):
+        print(f"\t{arrow.get(rec['Date']).format('DD MMM YYYY')}\t"
+              f"{rec['Party'][62:67]}\t£{-rec['Value']:,.2f}")
+
+
 session_date = get_latest_perse_time()
 coll = MongoClient().money.badminton
 
@@ -544,6 +554,7 @@ if __name__ == "__main__":
         "F": create_next_session_sheet,
         "I": invoices,
         "H": historic_session,
+        "P": show_paid_invoices,
     }
     if op in options:
         options[op]()
