@@ -432,19 +432,22 @@ def generate_sign_up_message(wa_pasting: str, host: str = "James") -> str:
 
     time_regex = "\[[0-2][0-9]:[0-5][0-9], [0-3][0-9]/[0-1][0-9]/20[0-9][0-9]] "
     ends = [i.end() for i in re.finditer(time_regex, wa_pasting)]
-    for ind, e in enumerate(ends):
-        message = wa_pasting[e:e + 10000 if ind == len(ends) - 1 else ends[ind + 1] - 21]
-        lines = []
-        for line in message.split('\n'):
-            sender, _, body = line.partition(": ")
-            lines.append(body if body else sender)
-        if len(lines[0]) < 21:
-            names += [ln for ln in lines if ln]
+    if ends:
+        for ind, e in enumerate(ends):
+            message = wa_pasting[e:e + 10000 if ind == len(ends) - 1 else ends[ind + 1] - 21]
+            lines = []
+            for line in message.split('\n'):
+                sender, _, body = line.partition(": ")
+                lines.append(body if body else sender)
+            if len(lines[0]) < 21:
+                names += [ln for ln in lines if ln]
+    else:
+        names += [ln for ln in wa_pasting.split("\n") if 0 < len(ln) < 21]
 
     while len(names) < 35:
         names.append("")
     people_with_a_spot = [f"{i + 1}. {nm}"
-                          for i, nm in enumerate(names[:33]) if nm]
+                          for i, nm in enumerate(names[:33])]
     in_list = "\n".join(people_with_a_spot)
     waitlist = "\n".join([f"{chr(97 + j)}. {wnm}" for j, wnm in enumerate(names[33:])])
     return f"{header}{in_list}\n\nWAITLIST:\n{waitlist}\n...\n" \
