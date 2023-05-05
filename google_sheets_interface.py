@@ -1,5 +1,4 @@
 import googleapiclient.errors
-import httplib2
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -105,7 +104,7 @@ def create_new_session_sheet(session_date):
     # clear stuff
     sheets_service.spreadsheets().values().batchClear(
         spreadsheetId=destination_ss,
-        body={"ranges": [f"{day}!A2:A2", f"{day}!A9:A49", f"{day}!D9:J49"]}
+        body={"ranges": [f"{day}!A9:A49", f"{day}!D9:J49"]}
     ).execute()
 
     # set certain cells/ranges to desired initial values
