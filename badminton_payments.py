@@ -2,7 +2,6 @@ from pymongo import MongoClient
 import arrow
 import argparse
 import pandas as pd
-from io import StringIO
 import pathlib
 import google_sheets_interface as gsi
 import re
@@ -50,19 +49,21 @@ def get_current_session() -> dict:
 
 
 def create_session() -> dict:
+    # TODO: add an option to delete historic sessions
+    # TODO: have a command line option to show all unpaid people
+    # TODO: show historic session details - perhaps in a table
     google_data = session_data_from_google_sheet()
     mongo_date = session_date.datetime
-    if get_current_session():
-        if input(f"Session already exists for "
-                 f"{session_date.format('ddd Do MMMM')}, overwrite? ") in "nN":
-            return {}
-        coll.delete_many({"Date": {"$eq": mongo_date}})
     new_document = {k: v for k, v in google_data.items() if k != "Col A"}
     new_document["Date"] = mongo_date
     new_document["People"] = {name: {} for name in
                               clean_name_list(google_data["Col A"])}
     coll.insert_one(new_document)
     return new_document
+
+
+def delete_session():
+    coll.delete_many({"Date": {"$eq": session_date.datetime}})
 
 
 def get_latest_perse_time(request_time: arrow.Arrow = arrow.now(tz="local")) -> arrow.Arrow:
@@ -79,17 +80,15 @@ def time_machine(requested_date: arrow.Arrow) -> arrow.Arrow:
     return get_latest_perse_time(requested_date.shift(days=1).to("local"))
 
 
-def create_nationwide_dataset(passed_data: str = "") -> pd.DataFrame:
+def create_nationwide_dataset() -> pd.DataFrame:
     # TODO: fail gracefully if file not found
     #   perhaps also not overwrite a session until valid data is found?
-    csv_input = StringIO(passed_data)
-    kw_args = {"names": ["Date", "Account ID", "AC Num", "Blank", "Value", "Balance"]}
-    if passed_data:
-        kw_args["delimiter"] = "\t"
-    else:
-        csv_input = get_latest_nationwide_csv_filename()
-        kw_args["encoding"] = "cp1252"
-        kw_args["skiprows"] = 5
+    csv_input = get_latest_nationwide_csv_filename()
+    kw_args = {
+        "names": ["Date", "Account ID", "AC Num", "Blank", "Value", "Balance"],
+        "encoding": "cp1252",
+        "skiprows": 5,
+    }
     bank_df = pd.read_csv(csv_input, **kw_args)
     bank_df = clean_nationwide_data(bank_df)
     print(bank_df)
@@ -122,17 +121,21 @@ def get_latest_nationwide_csv_filename() -> str:
 
 
 def monday_process() -> None:
-    session = create_session()
+    session = get_current_session()
     if not session:
-        return
+        session = create_session()
     attendees = session["People"]
+    rows_to_ignore, rp_key = 0, "Rows Processed"
+    if rp_key in session:
+        rows_to_ignore = session[rp_key]
 
     per_person_cost = session["Amount Charged"]
     me = "James (Host)"
-    if me in attendees:
+    if me in attendees and not rows_to_ignore:
         record_payment(me, per_person_cost, "host")
 
-    bank_df = create_nationwide_dataset()
+    bank_df = create_nationwide_dataset()[rows_to_ignore:]
+    print(f"=== BANK_DF ===\nOnly looking at:\n{bank_df}")
     for index_num in bank_df.index:
         account_id = bank_df.loc[index_num]["Account ID"]
         payment_amount = bank_df.loc[index_num]["Value"]
@@ -144,7 +147,9 @@ def monday_process() -> None:
                 payment_amount = pay_obo(paying_attendee, payment_amount,
                                          per_person_cost)
             record_payment(paying_attendee, payment_amount)
-    handle_non_transfer_payments()
+    update_rows_processed(len(bank_df))
+    if not rows_to_ignore:
+        handle_non_transfer_payments()
     sorting_out_excess_payments(per_person_cost)
 
     after = get_current_session()["People"]
@@ -154,6 +159,16 @@ def monday_process() -> None:
     still_unpaid = get_unpaid()
     if still_unpaid:
         print(f"{still_unpaid} have not paid.  That is {len(still_unpaid)} people.")
+
+
+def update_rows_processed(n_rows: int):
+    session = get_current_session()
+    rows_already_processed = 0
+    key = "Rows Processed"
+    if key in session:
+        rows_already_processed = session[key]
+    coll.update_one({"Date": {"$eq": session_date.datetime}},
+                    {"$set": {key: rows_already_processed + n_rows}})
 
 
 def pay_obo(donor: str, transfer_value: float, cost: float) -> float:
@@ -216,8 +231,7 @@ def allocate_to_past_session(payment_amount: float,
     current_session = session_date
     previous_unpaid = {}
     counter = 1
-    date_range = {"$gt": arrow.now().shift(days=-90).datetime,
-                  "$lte": session_date.datetime}
+    date_range = {"$gt": arrow.now().shift(days=-90).datetime}
     for session in coll.find({"People": {"$exists": True},
                               "Date": date_range}):
         historic_date = arrow.get(session["Date"])
@@ -430,7 +444,7 @@ def generate_sign_up_message(wa_pasting: str, host: str = "James") -> str:
 
     names = [f"{host} (Host)"]
 
-    time_regex = "\[[0-2][0-9]:[0-5][0-9], [0-3][0-9]/[0-1][0-9]/20[0-9][0-9]] "
+    time_regex = r"[[0-2][0-9]:[0-5][0-9], [0-3][0-9]/[0-1][0-9]/20[0-9][0-9]] "
     ends = [i.end() for i in re.finditer(time_regex, wa_pasting)]
     if ends:
         for ind, e in enumerate(ends):
@@ -514,6 +528,41 @@ def invoices():
     inc_total = sum([v for r in recs for person in r.values() for k, v in person.items() if k == 'amount'])
     print(f"Incidental transfers:\t£{inc_total:>6.2f}")
     print(f"Total to move:\t\t£{total_transfers + inc_total:>6.2f}")
+
+
+def show_session_details(session: {}):
+    print(f"Session details for {session['Date'].date()}")
+
+
+def details_for_past_n_sessions(n: int = 5) -> {}:
+    query = coll.find({"Date": {"$exists": True}}).sort("Date", 1)
+    sessions = [*query][-n:]
+    details = {}
+    for sess in sessions:
+        arrow_date = arrow.get(sess["Date"])
+        set_session_date(arrow_date)
+        unpaid = ", ".join(get_unpaid())
+        details[arrow_date] = f'{arrow_date.format("Do MMM YYYY"):>13}' \
+                              f'{sess["In Attendance"]:>8}  ' \
+                              f'£{sess["Amount Charged"]:>4.2f} ' \
+                              f'{unpaid:<32}'
+    return details
+
+
+def show_past_n_sessions(no_of_sessions: int):
+    print(f"{'Date':>13}  People   Cost Unpaid")
+    print("\n".join(details_for_past_n_sessions(no_of_sessions).values()))
+
+
+def allow_reprocessing_of_previous_n_sessions(n: int):
+    print("Pick a session to re-process:")
+    details = details_for_past_n_sessions(n)
+    display_rows = [*details.values()]
+    display_rows = [f" {d}" for d in display_rows[:9]] + display_rows[9:]
+    input_mapping = {i + 1: dt for i, dt in enumerate(details.keys())}
+    print(show_options_list(display_rows))
+    set_session_date(input_mapping[int(input(''))])
+    monday_process()
 
 
 def historic_session():
