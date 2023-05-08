@@ -150,7 +150,7 @@ def monday_process() -> None:
     update_rows_processed(len(bank_df))
     if not rows_to_ignore:
         handle_non_transfer_payments()
-    sorting_out_excess_payments(per_person_cost)
+    sorting_out_excess_payments()
 
     after = get_current_session()["People"]
     payments_string = "\n".join([f"\t£{get_total_payments(after, t):.2f} in {t}"
@@ -247,8 +247,7 @@ def allocate_to_past_session(payment_amount: float,
     set_session_date(previous_session)
     record_payment(attendee, payment_amount, payment_type=payment_method,
                    keep_previous_payment=True)
-    historic_session_cost = get_current_session()['Amount Charged']
-    sorting_out_excess_payments(historic_session_cost)
+    sorting_out_excess_payments()
     set_session_date(current_session)
 
 
@@ -269,15 +268,16 @@ def handle_non_transfer_payments():
                 record_payment(attendee, amount, case)
 
 
-def sorting_out_excess_payments(per_person_cost: float):
+def sorting_out_excess_payments():
+    per_person_cost = get_current_session()["Amount Charged"]
     for attendee in get_all_attendees():
         session_record = get_current_session()
-        for type_of_payment in ("transfer", "cash", "host"):
-            if type_of_payment in session_record["People"][attendee]:
-                amount_paid = session_record["People"][attendee][type_of_payment]
+        for payment_method in ("transfer", "cash", "host"):
+            if payment_method in session_record["People"][attendee]:
+                amount_paid = session_record["People"][attendee][payment_method]
                 excess = amount_paid - per_person_cost
                 while excess > 0.1:
-                    options = (
+                    allocation_options = (
                         f"Pay for someone else",
                         f"Keep all £{amount_paid:.2f} against {attendee}",
                         "Allocate this excess as incidental payment",
@@ -286,25 +286,25 @@ def sorting_out_excess_payments(per_person_cost: float):
                     choice = input(f"{attendee} has paid an additional "
                                    f"£{excess:.2f}. "
                                    f"What do you want to do with it?\n"
-                                   f"{show_options_list(options)}\n")
+                                   f"{show_options_list(allocation_options)}\n")
                     if choice.isnumeric():
                         if int(choice) == 1:
                             recipient = pick_name_from_unpaid("Who are they paying for")
                             excess -= per_person_cost
                             amount_paid -= per_person_cost
-                            record_payment(attendee, amount_paid, type_of_payment, False)
-                            record_payment(recipient, per_person_cost, type_of_payment)
+                            record_payment(attendee, amount_paid, payment_method, False)
+                            record_payment(recipient, per_person_cost, payment_method)
                             add_to_payments_obo(attendee, recipient)
                         elif int(choice) == 2:
                             excess = 0
                         elif int(choice) == 3:
                             record_incidental_payment(attendee, excess)
                             excess = 0
-                            record_payment(attendee, per_person_cost, type_of_payment, False)
+                            record_payment(attendee, per_person_cost, payment_method, False)
                         elif int(choice) == 4:
-                            allocate_to_past_session(excess, type_of_payment)
-                            excess -= per_person_cost
-                            record_payment(attendee, per_person_cost, type_of_payment, False)
+                            allocate_to_past_session(excess, payment_method)
+                            excess = 0
+                            record_payment(attendee, per_person_cost, payment_method, False)
 
 
 def record_incidental_payment(attendee: str, amount: float):
@@ -456,7 +456,8 @@ def generate_sign_up_message(wa_pasting: str, host: str = "James") -> str:
             if len(lines[0]) < 21:
                 names += [ln for ln in lines if ln]
     else:
-        names += [ln for ln in wa_pasting.split("\n") if 0 < len(ln) < 21]
+        names += [ln for ln in wa_pasting.split("\n")
+                  if 0 < len(ln) < 21 or "friend)" in ln]
 
     while len(names) < 35:
         names.append("")
@@ -549,7 +550,8 @@ def details_for_past_n_sessions(n: int = 5) -> {}:
     return details
 
 
-def show_past_n_sessions(no_of_sessions: int):
+def show_past_n_sessions(no_of_sessions: int = 5):
+    print("\nRecent sessions:")
     print(f"{'Date':>13}  People   Cost Unpaid")
     print("\n".join(details_for_past_n_sessions(no_of_sessions).values()))
 
@@ -607,6 +609,7 @@ if __name__ == "__main__":
         "I": invoices,
         "H": historic_session,
         "P": show_paid_invoices,
+        "R": show_past_n_sessions,
     }
     if op in options:
         options[op]()
