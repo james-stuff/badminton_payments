@@ -50,8 +50,6 @@ def get_current_session() -> dict:
 
 def create_session() -> dict:
     # TODO: add an option to delete historic sessions
-    # TODO: have a command line option to show all unpaid people
-    # TODO: show historic session details - perhaps in a table
     google_data = session_data_from_google_sheet()
     mongo_date = session_date.datetime
     new_document = {k: v for k, v in google_data.items() if k != "Col A"}
@@ -226,8 +224,6 @@ def identify_payer(account_id: str, amount: float) -> str:
 
 def allocate_to_past_session(payment_amount: float,
                              payment_method: str = "transfer"):
-    # TODO: "allocate against previous session" displayed even if
-    #       you are selecting from unpaid for who just paid in cash
     current_session = session_date
     previous_unpaid = {}
     counter = 1
@@ -281,7 +277,7 @@ def sorting_out_excess_payments():
                         f"Pay for someone else",
                         f"Keep all £{amount_paid:.2f} against {attendee}",
                         "Allocate this excess as incidental payment",
-                        "Allocate against a previous session"
+                        "Allocate against another session"
                     )
                     choice = input(f"{attendee} has paid an additional "
                                    f"£{excess:.2f}. "
@@ -351,7 +347,7 @@ def pick_name_from_unpaid(question: str) -> str:
 def pick_name_from(list_of_names: [str], question: str,
                    names_plus_options: bool = False) -> str:
     other_options = {
-        "H": "Allocate against a previous session",
+        "H": "Allocate against another session",
         "I": "Record as incidental payment",
         "?": "Don't know",
     } if names_plus_options else {}
@@ -390,19 +386,14 @@ def show_options_list(numbered_choices: [str], breakout_options: dict = {}) -> s
                         [f"[{k}] {v}" for k, v in breakout_options.items()]
     display_string = ""
     max_line_length = 72
-    while remaining_options:
-        next_line = "\t"
-        for index, text in enumerate(remaining_options):
-            if len(next_line) + len(text) <= max_line_length:
-                next_line += f"\t{text}"
-                if index == len(remaining_options) - 1:
-                    display_string += next_line
-                    remaining_options = []
-            else:
-                next_line += "\n"
-                display_string += next_line
-                remaining_options = remaining_options[index:]
-                break
+    # algorithm courtesy of ChatGPT:
+    current_line_length = 0
+    for option_text in remaining_options:
+        if current_line_length + len(option_text) > max_line_length:
+            display_string += "\n"
+            current_line_length = 0
+        display_string += f"\t{option_text}"
+        current_line_length += len(option_text) + 1
     return display_string
 
 
@@ -556,15 +547,18 @@ def show_past_n_sessions(no_of_sessions: int = 5):
     print("\n".join(details_for_past_n_sessions(no_of_sessions).values()))
 
 
-def allow_reprocessing_of_previous_n_sessions(n: int):
-    print("Pick a session to re-process:")
+def allow_reprocessing_of_previous_n_sessions(n: int = 5):
+    print("\nPick a session to re-process:")
     details = details_for_past_n_sessions(n)
     display_rows = [*details.values()]
     display_rows = [f" {d}" for d in display_rows[:9]] + display_rows[9:]
     input_mapping = {i + 1: dt for i, dt in enumerate(details.keys())}
+    print(f"\t\t     {'Date':>13}  People   Cost Unpaid")
     print(show_options_list(display_rows))
-    set_session_date(input_mapping[int(input(''))])
-    monday_process()
+    picked = int(input(''))
+    if picked in input_mapping:
+        set_session_date(input_mapping[picked])
+        monday_process()
 
 
 def historic_session():
@@ -609,7 +603,8 @@ if __name__ == "__main__":
         "I": invoices,
         "H": historic_session,
         "P": show_paid_invoices,
-        "R": show_past_n_sessions,
+        "O": show_past_n_sessions,
+        "R": allow_reprocessing_of_previous_n_sessions,
     }
     if op in options:
         options[op]()
