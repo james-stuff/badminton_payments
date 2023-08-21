@@ -146,8 +146,7 @@ def monday_process() -> None:
                                          per_person_cost)
             record_payment(paying_attendee, payment_amount)
     update_rows_processed(len(bank_df))
-    if not rows_to_ignore:
-        handle_non_transfer_payments()
+    handle_non_transfer_payments()
     sorting_out_excess_payments()
 
     after = get_current_session()["People"]
