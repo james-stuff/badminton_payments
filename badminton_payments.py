@@ -427,7 +427,8 @@ def get_total_payments(session_people: dict, payment_type: str = "transfer") -> 
 
 
 def generate_sign_up_message(wa_pasting: str, host: str = "James") -> str:
-    friday = time_machine(arrow.now().shift(days=7))
+    week_shift = 0 if arrow.now().format("dddd") == "Friday" else 7
+    friday = time_machine(arrow.now().shift(days=week_shift))
     header = f"Perse Upper School, " \
              f"{friday.format('dddd, Do MMMM YYYY')}, 19:30 - 21:30:" \
              f"\n\nUp to 6 courts, max. 33 players\n\n"
