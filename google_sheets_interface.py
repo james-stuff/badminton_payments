@@ -30,7 +30,7 @@ def get_session_data(session_date) -> dict:
     try:
         sheet_data = sheets_service.spreadsheets().values().get(
             spreadsheetId=get_spreadsheet_id(session_date),
-            range=f"{tab}!A1:K41").execute()
+            range=f"{tab}!A1:K49").execute()
     except googleapiclient.errors.HttpError:
         print(f"Hmmm . . . there doesn't seem to be a Sheet for "
               f"{session_date.format('Do MMMM YYYY')}")
