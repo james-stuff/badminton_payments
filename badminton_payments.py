@@ -94,8 +94,7 @@ def create_nationwide_dataset() -> pd.DataFrame:
 
 
 def clean_nationwide_data(df_bank: pd.DataFrame) -> pd.DataFrame:
-    """assumes Sat. post-session to Fri. inclusive window in which payments are made"""
-    next_saturday = session_date.shift(days=8).date()
+    """assumes payments received in 7-day window starting on session date"""
     df_bank["Date"] = pd.to_datetime(df_bank["Date"])
     df_bank["Account ID"] = df_bank["Account ID"].str[12:]
     df_bank = df_bank.drop(df_bank.loc[df_bank["AC Num"] == "JAMES CLARKE"].index)
@@ -104,8 +103,8 @@ def clean_nationwide_data(df_bank: pd.DataFrame) -> pd.DataFrame:
     for mf in money_fields:
         df_bank[mf] = pd.to_numeric(df_bank[mf].str.strip("£"))
     df_bank = df_bank.drop(["AC Num", "Blank"], axis=1)
-    df_out = df_bank.loc[(df_bank["Date"] > pd.Timestamp(session_date.date())) &
-                         (df_bank["Date"] < pd.Timestamp(next_saturday))]
+    df_out = df_bank.loc[(df_bank["Date"] >= pd.Timestamp(session_date.date())) &
+                         (df_bank["Date"] < pd.Timestamp(session_date.shift(days=7).date()))]
     print(df_out.info())
     return df_out
 
