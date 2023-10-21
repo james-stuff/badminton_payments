@@ -463,7 +463,7 @@ def create_next_session_sheet():
     """add a new sheet to the Google sheet for the month in required format"""
     next_friday = time_machine(get_latest_perse_time().shift(days=7))
     print(f"This'll create a sheet for {next_friday.format('Do MMM')}")
-    gsi.create_new_session_sheet(next_friday)
+    gsi.create_new_session_sheet(next_friday, court_rate_in_force(next_friday))
     # TODO: can I make the new sheet the one you land on when opening spreadsheet?
     #   From google: "How long do Google API tokens last?
     # A Google Cloud Platform project with an OAuth consent screen configured

@@ -62,10 +62,10 @@ def get_spreadsheet_id(session_date) -> str:
     return ""
 
 
-def create_new_session_sheet(session_date):
+def create_new_session_sheet(session_date, court_rate):
     """Creates blank sheet for the next session, also creating a new
     monthly spreadsheet to put it in, if one doesn't already exist"""
-    template_sheet = "1jiwsW57D8E70ywXz-zHKhqcArHpAME2771vyZTou-X0"
+    template_sheet = "1WAcDLKiHxb4cu-Fn1WGfuKnrsdSliWu_DnuUdHUGkBo"
     destination_ss = get_spreadsheet_id(session_date)
     if not destination_ss:
         new_spreadsheet = sheets_service.spreadsheets().create(
@@ -74,10 +74,10 @@ def create_new_session_sheet(session_date):
         ).execute()
         destination_ss = new_spreadsheet.get('spreadsheetId')
 
-    # copy the template (sheet from 27th Jan 2023) into destination sheet
+    # copy the template (sheet from 20th Oct 2023) into destination sheet
     new_sheet_id = sheets_service.spreadsheets().sheets().copyTo(
         spreadsheetId=template_sheet,
-        sheetId=178056562,
+        sheetId=1248468649,
         body={"destinationSpreadsheetId": destination_ss}
     ).execute()["sheetId"]
 
@@ -115,6 +115,10 @@ def create_new_session_sheet(session_date):
                 "range": f"{day}!A1:A1", "values": [[6]]
             },
             {
+                # court rate in force
+                "range": f"{day}!G1:G1", "values": [[court_rate]]
+            },
+            {
                 # payment checkboxes
                 "range": f"{day}!B9:C41", "values": [[False] * 2] * 33
             },
@@ -134,3 +138,4 @@ def create_new_session_sheet(session_date):
     #       (if necessary, could do what I used to do manually,
     #       i.e. take a copy of the first sheet, overwrite the original and rename
     # TODO: maybe also fill in the Transfer check-boxes in Monday process?
+    # tODO: update formula so it uses current Perse rate in force
