@@ -27,6 +27,8 @@ sheets_service = build('sheets', 'v4', credentials=creds)
 
 def get_session_data(session_date) -> dict:
     tab = session_date.day
+    if session_date.year > 2023:
+        tab = f"{tab} {session_date.format('MMM')}"
     try:
         sheet_data = sheets_service.spreadsheets().values().get(
             spreadsheetId=get_spreadsheet_id(session_date),
@@ -56,6 +58,8 @@ def get_spreadsheet_id(session_date) -> str:
     files = listing["files"]
     date_formats = tuple(f"{'M' * n} YYYY" for n in (3, 4))
     for f in files:
+        if session_date.year > 2023 and f["name"] == "Badminton Payments":
+            return f["id"]
         for df in date_formats:
             if session_date.format(df) in f["name"]:
                 return f["id"]
@@ -68,8 +72,10 @@ def create_new_session_sheet(session_date, court_rate):
     template_sheet = "1WAcDLKiHxb4cu-Fn1WGfuKnrsdSliWu_DnuUdHUGkBo"
     destination_ss = get_spreadsheet_id(session_date)
     if not destination_ss:
+        book_title = "Badminton Payments" if session_date.year > 2023 \
+            else session_date.format("MMM YYYY")
         new_spreadsheet = sheets_service.spreadsheets().create(
-            body={"properties": {"title": session_date.format("MMM YYYY")}},
+            body={"properties": {"title": book_title}},
             fields='spreadsheetId'
         ).execute()
         destination_ss = new_spreadsheet.get('spreadsheetId')
@@ -82,14 +88,16 @@ def create_new_session_sheet(session_date, court_rate):
     ).execute()["sheetId"]
 
     # rename the newly pasted sheet with the day of the session
-    day = session_date.format("D")
+    sheet_title = session_date.format("D")
+    if session_date.year > 2023:
+        sheet_title += f' {session_date.format("MMM")}'
     rename_request_body = {
         "requests": [
             {
                 "updateSheetProperties": {
                     "properties": {
                         "sheetId": new_sheet_id,
-                        "title": day
+                        "title": sheet_title
                     },
                     "fields": "title"
                 }
@@ -104,7 +112,7 @@ def create_new_session_sheet(session_date, court_rate):
     # clear stuff
     sheets_service.spreadsheets().values().batchClear(
         spreadsheetId=destination_ss,
-        body={"ranges": [f"{day}!A9:A49", f"{day}!D9:J49"]}
+        body={"ranges": [f"{sheet_title}!A9:A49", f"{sheet_title}!D9:J49"]}
     ).execute()
 
     # set certain cells/ranges to desired initial values
@@ -112,19 +120,19 @@ def create_new_session_sheet(session_date, court_rate):
         "data": [
             {
                 # number of courts
-                "range": f"{day}!A1:A1", "values": [[6]]
+                "range": f"{sheet_title}!A1:A1", "values": [[6]]
             },
             {
                 # court rate in force
-                "range": f"{day}!G1:G1", "values": [[court_rate]]
+                "range": f"{sheet_title}!G1:G1", "values": [[court_rate]]
             },
             {
                 # payment checkboxes
-                "range": f"{day}!B9:C41", "values": [[False] * 2] * 33
+                "range": f"{sheet_title}!B9:C41", "values": [[False] * 2] * 33
             },
             {
                 # cash received
-                "range": f"{day}!B5:B5", "values": [[0.00]]
+                "range": f"{sheet_title}!B5:B5", "values": [[0.00]]
             },
         ],
         "valueInputOption": "USER_ENTERED",
@@ -138,4 +146,3 @@ def create_new_session_sheet(session_date, court_rate):
     #       (if necessary, could do what I used to do manually,
     #       i.e. take a copy of the first sheet, overwrite the original and rename
     # TODO: maybe also fill in the Transfer check-boxes in Monday process?
-    # tODO: update formula so it uses current Perse rate in force
