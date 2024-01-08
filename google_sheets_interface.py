@@ -68,8 +68,7 @@ def get_spreadsheet_id(session_date) -> str:
 
 def create_new_session_sheet(session_date, court_rate):
     """Creates blank sheet for the next session, also creating a new
-    monthly spreadsheet to put it in, if one doesn't already exist"""
-    template_sheet = "1WAcDLKiHxb4cu-Fn1WGfuKnrsdSliWu_DnuUdHUGkBo"
+        containing workbook, if one doesn't already exist"""
     destination_ss = get_spreadsheet_id(session_date)
     if not destination_ss:
         book_title = "Badminton Payments" if session_date.year > 2023 \
@@ -80,10 +79,10 @@ def create_new_session_sheet(session_date, court_rate):
         ).execute()
         destination_ss = new_spreadsheet.get('spreadsheetId')
 
-    # copy the template (sheet from 20th Oct 2023) into destination sheet
+    # copy template into destination sheet
     new_sheet_id = sheets_service.spreadsheets().sheets().copyTo(
-        spreadsheetId=template_sheet,
-        sheetId=1248468649,
+        spreadsheetId="1UXxnh7r9yu21uxfSIO5BnjQseCVhP5ZUXFrLQ-OFKQw",
+        sheetId=1154866216,
         body={"destinationSpreadsheetId": destination_ss}
     ).execute()["sheetId"]
 
