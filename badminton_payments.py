@@ -425,37 +425,51 @@ def get_total_payments(session_people: dict, payment_type: str = "transfer") -> 
                 if isinstance(v, dict) and payment_type in v])
 
 
-def generate_sign_up_message(wa_pasting: str, host: str = "James") -> str:
+def generate_sign_up_message(wa_pasting: str, host: str = "James",
+                             show_waitlist: bool = True) -> str:
     week_shift = 0 if arrow.now().format("dddd") == "Friday" else 7
     friday = time_machine(arrow.now().shift(days=week_shift))
     header = f"Perse Upper School, " \
              f"{friday.format('dddd, Do MMMM YYYY')}, 19:30 - 21:30:" \
              f"\n\nUp to 6 courts, max. 33 players\n\n"
 
-    names = [f"{host} (Host)"]
+    names = []
+    if host:
+        names = [f"{host} (Host)"]
+
+    def is_valid_name(text: str) -> bool:
+        if not text:
+            return False
+        return len(text.split(" ")) < 3 or "friend)" in text.lower()
 
     time_regex = r"[[0-2][0-9]:[0-5][0-9], [0-3][0-9]/[0-1][0-9]/20[0-9][0-9]] "
     ends = [i.end() for i in re.finditer(time_regex, wa_pasting)]
     if ends:
         for ind, e in enumerate(ends):
-            message = wa_pasting[e:e + 10000 if ind == len(ends) - 1 else ends[ind + 1] - 21]
+            message = wa_pasting[
+                      e:e + 10000 if ind == len(ends) - 1 else
+                      ends[ind + 1] - 21]
             lines = []
             for line in message.split('\n'):
                 sender, _, body = line.partition(": ")
                 lines.append(body if body else sender)
-            if len(lines[0]) < 21:
-                names += [ln for ln in lines if ln]
+            names += [ln for ln in lines if is_valid_name(ln)]
     else:
         names += [ln for ln in wa_pasting.split("\n")
-                  if 0 < len(ln) < 21 or "friend)" in ln]
+                  if is_valid_name(ln)]
 
-    while len(names) < 35:
+    blank_spot_no = len(names) + 1
+    while len(names) < (35 if show_waitlist else blank_spot_no):
         names.append("")
     people_with_a_spot = [f"{i + 1}. {nm}"
                           for i, nm in enumerate(names[:33])]
     in_list = "\n".join(people_with_a_spot)
-    waitlist = "\n".join([f"{chr(97 + j)}. {wnm}" for j, wnm in enumerate(names[33:])])
-    return f"{header}{in_list}\n\nWAITLIST:\n{waitlist}\n...\n" \
+    waitlist = ""
+    if show_waitlist:
+        waitlist = "\nWAITLIST:\n" +\
+                   "\n".join([f"{chr(97 + j)}. {wnm}"
+                              for j, wnm in enumerate(names[33:])]) + "\n"
+    return f"{header}{in_list}\n{waitlist}...\n\n" \
            f"(copy and paste, adding your name to secure a spot)"
 
 

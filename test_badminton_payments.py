@@ -188,15 +188,29 @@ def test_sign_up_list():
     assert f"{bad_pay.time_machine(arrow.now().shift(days=7)).format('dddd, Do MMMM YYYY')}, 19:30 - 21:30:" in lines[0]
     assert lines[4] == "1. James (Host)"
     assert lines[36] == "33. Sean"
+    assert "Sixtine\n" in message   # double: two attendees  signed up
+    assert "Bia\n" in message       # in a single incoming message
     assert lines[-1] == "(copy and paste, adding your name to secure a spot)"
     message_1 = bad_pay.generate_sign_up_message(bp_test_inputs.wa_brief_messages)
     print(message_1)
     lines_1 = message_1.split("\n")
-    assert len(lines_1) == 43
+    assert len(lines_1) == 44
     assert f"{bad_pay.time_machine(arrow.now().shift(days=7)).format('dddd, Do MMMM YYYY')}, 19:30 - 21:30:" in lines[0]
     assert lines_1[4] == "1. James (Host)"
     assert lines_1[14] == "11. krystle"
     assert lines_1[-1] == "(copy and paste, adding your name to secure a spot)"
+    without_host = bad_pay.generate_sign_up_message(
+        bp_test_inputs.sample_with_extra_messages, host="")
+    print(without_host)
+    assert "James (Host)" not in without_host
+    assert "1. Kevin k\n" in without_host
+    without_extraneous_text = bad_pay.generate_sign_up_message(
+        bp_test_inputs.sample_with_extra_messages, show_waitlist=False
+    )
+    print(without_extraneous_text)
+    assert "Apologies" not in without_extraneous_text
+    assert " make it" not in without_extraneous_text
+    assert " Saurabh " in without_extraneous_text   # the "(X's friend)" case
 
 
 def test_allocating_against_previous_sessions():
