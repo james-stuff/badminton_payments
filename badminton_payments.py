@@ -78,26 +78,26 @@ def time_machine(requested_date: arrow.Arrow) -> arrow.Arrow:
     return get_latest_perse_time(requested_date.shift(days=1).to("local"))
 
 
-def create_nationwide_dataset() -> pd.DataFrame:
-    # TODO: fail gracefully if file not found
-    #   perhaps also not overwrite a session until valid data is found?
+def create_monday_nationwide_dataset() -> pd.DataFrame:
+    bank_df = clean_nationwide_data(get_latest_raw_nationwide_data())
+    return bank_df
+
+
+def get_latest_raw_nationwide_data() -> pd.DataFrame:
     csv_input = get_latest_nationwide_csv_filename()
     kw_args = {
         "names": ["Date", "Account ID", "AC Num", "Blank", "Value", "Balance"],
         "encoding": "cp1252",
         "skiprows": 5,
     }
-    bank_df = pd.read_csv(csv_input, **kw_args)
-    bank_df = clean_nationwide_data(bank_df)
-    print(bank_df)
-    return bank_df
+    return pd.read_csv(csv_input, **kw_args)
 
 
 def clean_nationwide_data(df_bank: pd.DataFrame) -> pd.DataFrame:
     """assumes payments received in 7-day window starting on session date"""
     df_bank["Date"] = pd.to_datetime(df_bank["Date"])
     df_bank["Account ID"] = df_bank["Account ID"].str[12:]
-    df_bank = df_bank.drop(df_bank.loc[df_bank["AC Num"] == "JAMES CLARKE"].index)
+    df_bank = df_bank.drop(df_bank.loc[df_bank["Value"].isna()].index)
     df_bank.loc[df_bank["Account ID"] == "m", "Account ID"] = df_bank["AC Num"].str[:15]
     money_fields = ["Value", "Balance"]
     for mf in money_fields:
@@ -131,8 +131,8 @@ def monday_process() -> None:
     if me in attendees and not rows_to_ignore:
         record_payment(me, per_person_cost, "host")
 
-    bank_df = create_nationwide_dataset()[rows_to_ignore:]
-    print(f"=== BANK_DF ===\nOnly looking at:\n{bank_df}")
+    bank_df = create_monday_nationwide_dataset()[rows_to_ignore:]
+    print(f"=== BANK_DF ===\nLooking at:\n{bank_df}")
     for index_num in bank_df.index:
         account_id = bank_df.loc[index_num]["Account ID"]
         payment_amount = bank_df.loc[index_num]["Value"]
@@ -469,6 +469,7 @@ def generate_sign_up_message(wa_pasting: str, host: str = "James",
         waitlist = "\nWAITLIST:\n" +\
                    "\n".join([f"{chr(97 + j)}. {wnm}"
                               for j, wnm in enumerate(names[33:])]) + "\n"
+        # TODO: would be nice if it upper-cased the names
     return f"{header}{in_list}\n{waitlist}...\n\n" \
            f"(copy and paste, adding your name to secure a spot)"
 
@@ -589,6 +590,7 @@ def historic_session():
 
 
 def show_paid_invoices():
+    # from Santander account:
     current_ac = MongoClient().money.current_account
     start_day = arrow.now().shift(days=-180).floor("month")
     print("\nRecently paid Perse School invoices:")
@@ -596,6 +598,27 @@ def show_paid_invoices():
                                 "Party": {"$regex": " SP[0-9]{3} "}}):
         print(f"\t{arrow.get(rec['Date']).format('DD MMM YYYY')}\t"
               f"{rec['Party'][62:67]}\t£{-rec['Value']:,.2f}")
+
+    # from Nationwide account (6th March 2024 onwards):
+    bank_df = get_latest_raw_nationwide_data()
+    df_payments = bank_df.loc[bank_df["AC Num"] == "THE PERSE SCHOOL"]
+    doc_query = {"_id": "NationwidePersePayments"}
+    payments_doc = coll.find_one(doc_query)
+    if not payments_doc:
+        coll.insert_one(doc_query)
+        payments = {}
+    else:
+        payments = {k: v for k, v in payments_doc.items()
+                    if k != "_id"
+                    and arrow.get(k, "DD MMM YYYY") > start_day}
+    for dd in df_payments["Date"].unique():     # handles multiple payments on same day
+        amounts = pd.to_numeric(
+            df_payments.loc[df_payments["Date"] == dd]["Blank"].str.strip("£")
+        ).to_list()
+        if dd not in payments or len(payments[dd]) != len(amounts):
+            coll.update_one(doc_query, {"$set": {dd: amounts}})
+        for am in amounts:
+            print(f"\t{dd}\t  NW \t£{am:>6,.2f}")
 
 
 session_date = get_latest_perse_time()
