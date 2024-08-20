@@ -10,7 +10,7 @@ scopes = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.metadata.readonly",
 ]
-cred_path = "..\\_google_credentials\\"
+cred_path = "C:\\Users\\j_a_c\\Python Stuff\\_google_credentials\\"
 token_file = f"{cred_path}token.json"
 cred_file = [fn for fn in os.listdir(cred_path) if fn.startswith("client_secret_")][0]
 if time.time() > os.path.getmtime(token_file) + (60 * 60 * 24 * 7):
@@ -145,3 +145,4 @@ def create_new_session_sheet(session_date, court_rate):
     #       (if necessary, could do what I used to do manually,
     #       i.e. take a copy of the first sheet, overwrite the original and rename
     # TODO: maybe also fill in the Transfer check-boxes in Monday process?
+    # TODO: similar thing to court rates in force, but for shuttle levy

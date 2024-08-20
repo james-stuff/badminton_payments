@@ -19,7 +19,7 @@ def session_data_from_google_sheet() -> dict:
 def clean_name_list(names: [str]) -> [str]:
     def extract_name(row: str) -> str:
         if row:
-            return row.strip(" @.1234567890").title()
+            return row.strip(" @.1234567890\u2060").title()
         return ""
 
     names = [*filter(lambda x: x, [extract_name(n) for n in names])]
@@ -95,7 +95,7 @@ def get_latest_raw_nationwide_data() -> pd.DataFrame:
 
 def clean_nationwide_data(df_bank: pd.DataFrame) -> pd.DataFrame:
     """assumes payments received in 7-day window starting on session date"""
-    df_bank["Date"] = pd.to_datetime(df_bank["Date"])
+    df_bank["Date"] = pd.to_datetime(df_bank["Date"], format="mixed", dayfirst=True)
     df_bank["Account ID"] = df_bank["Account ID"].str[12:]
     df_bank = df_bank.drop(df_bank.loc[df_bank["Value"].isna()].index)
     df_bank.loc[df_bank["Account ID"] == "m", "Account ID"] = df_bank["AC Num"].str[:15]
@@ -561,7 +561,7 @@ def show_past_n_sessions(no_of_sessions: int = 5):
     print("\n".join(details_for_past_n_sessions(no_of_sessions).values()))
 
 
-def allow_reprocessing_of_previous_n_sessions(n: int = 5):
+def allow_reprocessing_of_previous_n_sessions(n: int = 8):
     print("\nPick a session to re-process:")
     details = details_for_past_n_sessions(n)
     display_rows = [*details.values()]
