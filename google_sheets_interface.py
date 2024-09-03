@@ -13,7 +13,7 @@ scopes = [
 cred_path = "C:\\Users\\j_a_c\\Python Stuff\\_google_credentials\\"
 token_file = f"{cred_path}token.json"
 cred_file = [fn for fn in os.listdir(cred_path) if fn.startswith("client_secret_")][0]
-if time.time() > os.path.getmtime(token_file) + (60 * 60 * 24 * 7):
+if os.path.exists(token_file) and time.time() > os.path.getmtime(token_file) + (60 * 60 * 24 * 7):
     os.remove(token_file)
 if os.path.exists(token_file):
     creds = Credentials.from_authorized_user_file(token_file, scopes)
